@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 — 2026-11-16
+
+- Add an optional Linux/Hyprland desktop companion that keeps the note fixed during native terminal scrollback, without placing sticky-note images in terminal history.
+- Increase headline type from 48 to 72 design units (50%), retaining the task typography.
+- Replace the layered hard shadow with a blurred alpha shadow and balanced transparent gutters; the desktop backend no longer erases a rectangular area around the note.
+- Follow the owning terminal's process ancestry, geometry, workspace, and visibility with a click-through, non-focusable Qt Quick layer-shell surface.
+- Preserve terminal-only rendering on unsupported setups, with explicit setup/failure notices and `OMP_STICKY_RENDERER=terminal` opt-out.
+- Add companion build/package scripts and deterministic ownership, placement, workspace, and occlusion coverage.
+
 ## 1.1.2 — 2026-11-16
 
 - Remove OMP's decorative icon/tag prefix from automatic headlines, retaining the meaningful title and leaving manual titles untouched.

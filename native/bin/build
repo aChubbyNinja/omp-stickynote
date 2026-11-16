@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+mkdir -p "$ROOT/build"
+cd "$ROOT/build"
+qmake6 "$ROOT/omp-stickynote-overlay.pro"
+make -j"${JOBS:-$(nproc)}"
+printf 'Built %s/build/omp-stickynote-overlay\n' "$ROOT"

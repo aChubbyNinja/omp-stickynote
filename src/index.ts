@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
+import { getCellDimensions, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
 import { cleanLabel, ENTRY_TYPE, parseSaved, restore, sessionTitle, type SavedNote, type Task } from "./state.ts";
+import { DesktopNote } from "./desktop.ts";
 
 const WIDGET = "omp-stickynote.owner";
 const HELP = "/sticky Title | task one | task two | task three\n/sticky auto · /sticky hide · /sticky show · /sticky done 1";
@@ -18,11 +19,13 @@ export default function stickynote(pi: ExtensionAPI): void {
   let current: ExtensionContext | undefined;
   let centered = false;
   let hasStarted = false;
+  let historyRows = 0;
+  let desktop: DesktopNote | undefined;
   let removePaintListener: (() => void) | undefined;
   let painted: { row: number; col: number; width: number; height: number } | undefined;
   const noteOptions = {
     requestRender: () => { clearGraphics(); tui?.requestRender(true); },
-    maxRows: () => Math.max(1, Math.min(18, (tui?.terminal.rows ?? 24) - 7)),
+    maxRows: () => Math.max(1, (tui?.terminal.rows ?? 24) - 7),
     onError: (error: unknown) => current?.ui.notify(`Sticky note graphics unavailable: ${String(error)}`, "warning"),
   };
   let note = new StickyNote(noteOptions);
@@ -49,25 +52,38 @@ export default function stickynote(pi: ExtensionAPI): void {
     tui.terminal.write(output + restoreCursor() + "\x1b[?2026l");
   }
 
+  function paintDesktop(visible = true): void {
+    if (!desktop || !tui) return;
+    const cell = getCellDimensions();
+    desktop.render({
+      columns: tui.terminal.columns, rows: tui.terminal.rows,
+      cellWidthPx: cell.widthPx, cellHeightPx: cell.heightPx,
+      centered, visible: visible && !saved.hidden,
+    });
+  }
+
   function paint(): void {
     clearGraphics();
-    note.update(saved.manual ?? { title: title(), tasks });
+    const content = saved.manual ?? { title: title(), tasks };
+    note.update(content);
+    desktop?.update(content);
     tui?.requestRender(true);
   }
 
   function unmount(): void {
     clearGraphics();
+    paintDesktop(false);
     overlay?.hide();
     overlay = undefined;
     tui?.requestRender(true);
   }
 
   function mount(): void {
-    if (!tui || saved.hidden || overlay) return;
+    if (!tui || saved.hidden || overlay || desktop) return;
     const previous = tui.getFocused();
     overlay = tui.showOverlay(note, {
       anchor: centered ? "top-center" : "top-right",
-      width: 54,
+      width: 58,
       margin: { top: 0, right: 2, left: 1, bottom: 4 },
       maxHeight: "100%",
     });
@@ -106,6 +122,8 @@ export default function stickynote(pi: ExtensionAPI): void {
     timer = undefined;
     removePaintListener?.();
     removePaintListener = undefined;
+    desktop?.dispose();
+    desktop = undefined;
     note.dispose();
     unmount();
     tui = undefined;
@@ -117,14 +135,34 @@ export default function stickynote(pi: ExtensionAPI): void {
     current = ctx;
     centered = false;
     hasStarted = false;
+    historyRows = 0;
     note = new StickyNote(noteOptions);
     sync(ctx, true);
     ctx.ui.setWidget(WIDGET, liveTui => {
       tui = liveTui;
       const ownedNote = note;
+      if (DesktopNote.available()) {
+        desktop = new DesktopNote({
+          onReady: () => { if (note === ownedNote) paint(); },
+          onError: error => {
+            if (note !== ownedNote) return;
+            const failed = desktop;
+            desktop = undefined;
+            failed?.dispose();
+            ctx.ui.notify(`Sticky note desktop overlay unavailable; using terminal rendering: ${String(error)}`, "warning");
+            mount();
+            paint();
+          },
+        });
+      } else if (process.platform === "linux" && process.env.HYPRLAND_INSTANCE_SIGNATURE &&
+          process.env.OMP_STICKY_RENDERER !== "terminal") {
+        ctx.ui.notify("Sticky note is using terminal rendering. Build native/bin/build in the extension checkout for a scrollback-safe desktop overlay.", "info");
+      }
       removePaintListener = liveTui.addPaintListener(frame => {
-        if (frame.alt || saved.hidden) return;
-        if (hasStarted && !centered && !frame.reset && frame.history.length > 0) {
+        if (frame.reset) historyRows = 0;
+        historyRows += frame.history.length;
+        if (frame.alt || saved.hidden) { paintDesktop(false); return; }
+        if (hasStarted && !centered && historyRows + frame.viewport.length > frame.rows) {
           clearGraphics();
           centered = true;
           const entry = liveTui.overlayStack.find(item => item.component === ownedNote);
@@ -136,12 +174,13 @@ export default function stickynote(pi: ExtensionAPI): void {
         for (let i = liveTui.overlayStack.length - 1; i >= 0; i--) {
           const entry = liveTui.overlayStack[i];
           if (entry.hidden || entry.options?.visible?.(frame.columns, frame.rows) === false) continue;
-          if (entry.component !== ownedNote) return;
+          if (entry.component !== ownedNote) { paintDesktop(false); return; }
           break;
         }
+        if (desktop) { paintDesktop(); return; }
         const graphics = ownedNote.graphicsRows;
         if (!graphics) return;
-        const width = Math.max(1, Math.min(54, frame.columns - 3));
+        const width = Math.max(1, Math.min(58, frame.columns - 3));
         const col = centered ? 1 + Math.floor((frame.columns - 3 - width) / 2) : frame.columns - 2 - width;
         const row = 0;
         // OMP 18.21 slices partial-overlay rows as text, corrupting SIXEL.
@@ -157,6 +196,7 @@ export default function stickynote(pi: ExtensionAPI): void {
         painted = { row, col, width, height: graphics.length };
       });
       mount();
+      paint();
       const owner: Component = {
         render: () => [],
         dispose: () => { if (note === ownedNote) stop(); else ownedNote.dispose(); },
