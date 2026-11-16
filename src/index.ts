@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
@@ -9,7 +8,6 @@ const HELP = "/sticky Title | task one | task two | task three\n/sticky auto · 
 
 export default function stickynote(pi: ExtensionAPI): void {
   pi.setLabel("OMP Stickynote");
-  const note = new StickyNote();
   let saved: SavedNote = { version: 1, hidden: false, manual: null };
   let tasks: Task[] = [];
   let tui: TUI | undefined;
@@ -18,29 +16,60 @@ export default function stickynote(pi: ExtensionAPI): void {
   let lastLeaf: string | null | undefined;
   let lastTitle: string | undefined;
   let current: ExtensionContext | undefined;
+  let centered = false;
+  let hasStarted = false;
+  let removePaintListener: (() => void) | undefined;
+  let painted: { row: number; col: number; width: number; height: number } | undefined;
+  const noteOptions = {
+    requestRender: () => { clearGraphics(); tui?.requestRender(true); },
+    maxRows: () => Math.max(1, Math.min(18, (tui?.terminal.rows ?? 24) - 7)),
+    onError: (error: unknown) => current?.ui.notify(`Sticky note graphics unavailable: ${String(error)}`, "warning"),
+  };
+  let note = new StickyNote(noteOptions);
 
-  function title(ctx: ExtensionContext): string {
-    return cleanLabel(pi.getSessionName() || basename(ctx.cwd) || "Project");
+  function title(): string {
+    return cleanLabel(pi.getSessionName() ?? "") || "Ready to begin";
   }
 
-  function paint(ctx: ExtensionContext): void {
-    note.update(saved.manual ?? { title: title(ctx), tasks });
-    tui?.requestRender();
+  function restoreCursor(): string {
+    const cursor = tui?.getDebugPaint()?.cursor;
+    return cursor
+      ? `\x1b[${cursor.y + 1};${cursor.x + 1}H${cursor.visible ? "\x1b[?25h" : "\x1b[?25l"}`
+      : "\x1b[?25l";
+  }
+
+  function clearGraphics(): void {
+    const rect = painted;
+    painted = undefined;
+    if (!rect || !tui || tui.getDebugPaint()?.altScreen) return;
+    let output = "\x1b[?2026h\x1b[0m";
+    for (let y = 0; y < rect.height; y++) {
+      output += `\x1b[${rect.row + y + 1};${rect.col + 1}H\x1b[${rect.width}X`;
+    }
+    tui.terminal.write(output + restoreCursor() + "\x1b[?2026l");
+  }
+
+  function paint(): void {
+    clearGraphics();
+    note.update(saved.manual ?? { title: title(), tasks });
+    tui?.requestRender(true);
   }
 
   function unmount(): void {
+    clearGraphics();
     overlay?.hide();
     overlay = undefined;
+    tui?.requestRender(true);
   }
 
   function mount(): void {
     if (!tui || saved.hidden || overlay) return;
     const previous = tui.getFocused();
     overlay = tui.showOverlay(note, {
-      anchor: "top-right",
-      width: 38,
+      anchor: centered ? "top-center" : "top-right",
+      width: 54,
       margin: { top: 1, right: 2, left: 1, bottom: 4 },
-      maxHeight: 11,
+      maxHeight: "100%",
     });
     // OMP 18.21 has no passive overlay option. Its public stack uses `released`
     // for sheets that remain visible without holding keyboard focus. Keep this
@@ -52,7 +81,7 @@ export default function stickynote(pi: ExtensionAPI): void {
 
   function sync(ctx: ExtensionContext, force = false): void {
     const leaf = ctx.sessionManager.getLeafId();
-    const nextTitle = title(ctx);
+    const nextTitle = title();
     if (!force && leaf === lastLeaf && nextTitle === lastTitle) return;
     if (force || leaf !== lastLeaf) {
       ({ saved, tasks } = restore(ctx.sessionManager.getBranch()));
@@ -61,7 +90,7 @@ export default function stickynote(pi: ExtensionAPI): void {
     lastTitle = nextTitle;
     if (saved.hidden) unmount();
     else mount();
-    paint(ctx);
+    paint();
   }
 
   function save(ctx: ExtensionContext): void {
@@ -69,12 +98,15 @@ export default function stickynote(pi: ExtensionAPI): void {
     lastLeaf = ctx.sessionManager.getLeafId();
     if (saved.hidden) unmount();
     else mount();
-    paint(ctx);
+    paint();
   }
 
   function stop(): void {
     if (timer !== undefined) current?.clearTimer(timer);
     timer = undefined;
+    removePaintListener?.();
+    removePaintListener = undefined;
+    note.dispose();
     unmount();
     tui = undefined;
   }
@@ -83,13 +115,51 @@ export default function stickynote(pi: ExtensionAPI): void {
     if (ctx.mode !== "tui" || ctx.agent.kind !== "main") return;
     stop();
     current = ctx;
+    centered = false;
+    hasStarted = false;
+    note = new StickyNote(noteOptions);
     sync(ctx, true);
     ctx.ui.setWidget(WIDGET, liveTui => {
       tui = liveTui;
+      const ownedNote = note;
+      removePaintListener = liveTui.addPaintListener(frame => {
+        if (frame.alt || saved.hidden) return;
+        if (hasStarted && !centered && !frame.reset && frame.history.length > 0) {
+          clearGraphics();
+          centered = true;
+          const entry = liveTui.overlayStack.find(item => item.component === ownedNote);
+          if (entry?.options) entry.options.anchor = "top-center";
+          liveTui.requestRender(true);
+          return;
+        }
+        // Never paint over a host dialog. Its own layer retains keyboard focus.
+        for (let i = liveTui.overlayStack.length - 1; i >= 0; i--) {
+          const entry = liveTui.overlayStack[i];
+          if (entry.hidden || entry.options?.visible?.(frame.columns, frame.rows) === false) continue;
+          if (entry.component !== ownedNote) return;
+          break;
+        }
+        const graphics = ownedNote.graphicsRows;
+        if (!graphics) return;
+        const width = Math.max(1, Math.min(54, frame.columns - 3));
+        const col = centered ? 1 + Math.floor((frame.columns - 3 - width) / 2) : frame.columns - 2 - width;
+        const row = 1;
+        // OMP 18.21 slices partial-overlay rows as text, corrupting SIXEL.
+        // The component reserves the rectangle with ordinary blank rows; emit
+        // its cached Image rows after the host paint, without passing graphics
+        // through that slicer. The mounted overlay keeps a full-height live
+        // viewport, which OMP erases before pushing history into scrollback.
+        let output = "\x1b[?2026h";
+        for (let y = 0; y < graphics.length; y++) {
+          output += `\x1b[${row + y + 1};${col + 1}H${graphics[y]}`;
+        }
+        liveTui.terminal.write(output + "\x1b[0m" + restoreCursor() + "\x1b[?2026l");
+        painted = { row, col, width, height: graphics.length };
+      });
       mount();
       const owner: Component = {
         render: () => [],
-        dispose: () => { unmount(); tui = undefined; },
+        dispose: () => { if (note === ownedNote) stop(); else ownedNote.dispose(); },
       };
       return owner;
     });
@@ -103,6 +173,12 @@ export default function stickynote(pi: ExtensionAPI): void {
   pi.on("session_branch", (_event, ctx) => start(ctx));
   pi.on("session_tree", (_event, ctx) => start(ctx));
   pi.on("session_shutdown", () => stop());
+  pi.on("input", (event, ctx) => {
+    if (ctx.agent.kind === "main" && !event.text.trimStart().startsWith("/")) hasStarted = true;
+  });
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (ctx.agent.kind === "main") hasStarted = true;
+  });
 
   pi.registerCommand("sticky", {
     description: "Pin a project title and 1–3 tasks; auto, hide, show, or done N",

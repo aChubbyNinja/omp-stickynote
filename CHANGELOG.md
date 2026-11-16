@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0 — 2026-11-16
+
+- Replace the automatic working-directory title and empty checkbox with **Ready to begin** and a short welcome until real session details arrive.
+- Start at the top-right, then move once to the top-center after transcript scrolling; reset placement for a new session.
+- Add host-native SVG rasterization for graphics-capable terminals: a larger, heavier title, prominent task labels, softened yellow paper, and a subtle shadow.
+- Adapt the note to available width and height, up to roughly 54 columns, while retaining a readable ANSI fallback.
+- Add host-backed text and SIXEL regression coverage, including safe image placement and stale-raster invalidation.
+
+Host compatibility: OMP 18.21.0; no new external runtime dependencies. Graphics output verified in Foot/SIXEL on Linux/Wayland. Plain ANSI cannot enlarge individual fonts. Restart existing OMP sessions to load the update.
+
 ## 1.0.0 — 2026-11-16
 
 - Add a persistent yellow, top-right sticky note with a bold project title and one to three task checkboxes.
