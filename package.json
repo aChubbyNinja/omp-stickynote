@@ -1,0 +1,22 @@
+{
+  "name": "omp-stickynote",
+  "version": "1.0.0",
+  "description": "A persistent yellow project sticky note for Oh My Pi terminal sessions.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Josh Gannon",
+  "repository": { "type": "git", "url": "https://github.com/aChubbyNinja/omp-stickynote.git" },
+  "homepage": "https://github.com/aChubbyNinja/omp-stickynote#readme",
+  "bugs": "https://github.com/aChubbyNinja/omp-stickynote/issues",
+  "keywords": ["omp", "oh-my-pi", "extension", "terminal", "sticky-note", "productivity"],
+  "files": ["src", "README.md", "LICENSE", "CHANGELOG.md"],
+  "omp": { "extensions": ["./src/index.ts"] },
+  "scripts": { "check": "tsc --noEmit", "test": "node --test test/*.test.ts" },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.21.0",
+    "@oh-my-pi/pi-tui": "18.21.0",
+    "@types/node": "^26.0.0",
+    "typescript": "^6.0.0"
+  },
+  "engines": { "node": ">=24" }
+}
