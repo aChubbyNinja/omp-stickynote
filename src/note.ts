@@ -1,6 +1,6 @@
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
 import { getCellDimensions, getImageDimensions, Image, TERMINAL, truncateToWidth, visibleWidth, type Component } from "@oh-my-pi/pi-tui";
-import { paperSvg, WELCOME, wrapLabel } from "./paper.ts";
+import { PAPER_WIDTH, paperSvg, WELCOME, wrapLabel } from "./paper.ts";
 import { cleanLabel, type Note } from "./state.ts";
 
 // Deliberately independent of the host theme: sticky-paper yellow, dark ink.
@@ -126,7 +126,7 @@ export class StickyNote implements Component {
     if (this.#disposed || this.#running || !request || this.#failedKey === request.key || this.#imageKey === request.key) return;
     this.#running = true;
     try {
-      const paper = paperSvg(request.note);
+      const paper = paperSvg(request.note, request.cell.heightPx * PAPER_WIDTH / request.widthPx);
       // Permit HiDPI upscaling and pad to whole terminal cells, as the host's SvgFigure does.
       const scale = Math.max(1, request.widthPx / paper.width, request.heightPx / paper.height);
       const png = await rasterizeSvg(new TextEncoder().encode(paper.svg), request.widthPx, request.heightPx, scale, request.cell);

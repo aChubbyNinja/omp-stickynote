@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanLabel, ENTRY_TYPE, parseSaved, restore, tasksFromPhases } from "../src/state.ts";
+import { cleanLabel, ENTRY_TYPE, parseSaved, restore, sessionTitle, tasksFromPhases } from "../src/state.ts";
 
 test("labels cannot inject colors, cursor motion, or terminal hyperlinks", () => {
   assert.equal(cleanLabel("\x1b[31mBuild\x1b[0m\n\x1b]8;;https://example.com\x07app\x1b]8;;\x07\u202e"), "Build app");
+});
+
+test("automatic headlines remove OMP icon tags without discarding meaningful title words", () => {
+  assert.equal(sessionTitle("\u{f039a} STICKY: Test sticky note while scrolling"), "Test sticky note while scrolling");
+  assert.equal(sessionTitle("⚙️ BUILD: Release dashboard"), "Release dashboard");
+  assert.equal(sessionTitle("API: Preserve this heading"), "API: Preserve this heading");
+  assert.equal(sessionTitle("Release dashboard"), "Release dashboard");
+  assert.equal(sessionTitle("\u{f039a} STICKY: "), "Ready to begin");
 });
 
 test("only three unfinished tasks remain; completed and abandoned work does not crowd them out", () => {

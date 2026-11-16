@@ -26,6 +26,13 @@ export function cleanLabel(text: string): string {
     .trim();
 }
 
+/** OMP's terminal icon/tag is window chrome, not part of the project's headline. */
+export function sessionTitle(name: string): string {
+  return cleanLabel(name)
+    .replace(/^[\p{Extended_Pictographic}\p{Co}\uFE0F\u200D]+\s+[A-Z][A-Z0-9_-]*:\s*/u, "")
+    .trim() || "Ready to begin";
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }

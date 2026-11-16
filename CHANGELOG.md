@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2 — 2026-11-16
+
+- Remove OMP's decorative icon/tag prefix from automatic headlines, retaining the meaningful title and leaving manual titles untouched.
+- Increase native headline type from 36 to 48 units (33%) with extra-heavy weight and a subtle strengthening stroke; keep task typography unchanged.
+- Halve the native graphic's top gap within the terminal viewport using cell-aware spacing. ANSI fallback moves to the top row because text terminals cannot position half rows.
+- Add regression coverage for decorated session titles and ordinary titles containing colons.
+
 ## 1.1.1 — 2026-11-16
 
 - Center the headline and display it in all caps for better distance readability, in both native graphics and ANSI output.

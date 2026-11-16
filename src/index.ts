@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
-import { cleanLabel, ENTRY_TYPE, parseSaved, restore, type SavedNote, type Task } from "./state.ts";
+import { cleanLabel, ENTRY_TYPE, parseSaved, restore, sessionTitle, type SavedNote, type Task } from "./state.ts";
 
 const WIDGET = "omp-stickynote.owner";
 const HELP = "/sticky Title | task one | task two | task three\n/sticky auto · /sticky hide · /sticky show · /sticky done 1";
@@ -28,7 +28,7 @@ export default function stickynote(pi: ExtensionAPI): void {
   let note = new StickyNote(noteOptions);
 
   function title(): string {
-    return cleanLabel(pi.getSessionName() ?? "") || "Ready to begin";
+    return sessionTitle(pi.getSessionName() ?? "");
   }
 
   function restoreCursor(): string {
@@ -68,7 +68,7 @@ export default function stickynote(pi: ExtensionAPI): void {
     overlay = tui.showOverlay(note, {
       anchor: centered ? "top-center" : "top-right",
       width: 54,
-      margin: { top: 1, right: 2, left: 1, bottom: 4 },
+      margin: { top: 0, right: 2, left: 1, bottom: 4 },
       maxHeight: "100%",
     });
     // OMP 18.21 has no passive overlay option. Its public stack uses `released`
@@ -143,7 +143,7 @@ export default function stickynote(pi: ExtensionAPI): void {
         if (!graphics) return;
         const width = Math.max(1, Math.min(54, frame.columns - 3));
         const col = centered ? 1 + Math.floor((frame.columns - 3 - width) / 2) : frame.columns - 2 - width;
-        const row = 1;
+        const row = 0;
         // OMP 18.21 slices partial-overlay rows as text, corrupting SIXEL.
         // The component reserves the rectangle with ordinary blank rows; emit
         // its cached Image rows after the host paint, without passing graphics
