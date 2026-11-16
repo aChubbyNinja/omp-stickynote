@@ -15,14 +15,18 @@ export default async function noteContract(pi: ExtensionAPI): Promise<void> {
   }
   note.update({ title: "Release dashboard", tasks: [{ text: "Verify checkout", done: false }] });
   let text = note.render(38).map(cleanLabel).join("\n");
-  assert.match(text, /Release dashboard/);
+  assert.match(text, /RELEASE DASHBOARD/);
+  const heading = note.render(38).find(row => row.includes("RELEASE DASHBOARD"));
+  assert.ok(heading);
+  const [before, after] = heading.split("RELEASE DASHBOARD");
+  assert.ok(Math.abs(visibleWidth(before) - visibleWidth(after)) <= 2, "Headline must be centered, allowing the one-column shadow");
   assert.match(text, /\[ \] Verify checkout/);
   note.update({ title: "Release dashboard", tasks: [{ text: "Verify checkout", done: true }] });
   text = note.render(38).map(cleanLabel).join("\n");
   assert.match(text, /\[x\] Verify checkout/);
   note.update({ title: "Release dashboard", tasks: [] });
   text = note.render(38).map(cleanLabel).join("\n");
-  assert.match(text, /Release dashboard/);
+  assert.match(text, /RELEASE DASHBOARD/);
   assert.doesNotMatch(text, /\[[ x]\]/, "Clearing tasks must restore the empty state, not a blank checkbox");
   note.dispose();
 

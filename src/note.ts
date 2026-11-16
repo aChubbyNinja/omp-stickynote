@@ -223,7 +223,9 @@ export class StickyNote implements Component {
       ? PAPER + (top ? "╭" : "╰") + "─".repeat(cardWidth - 2) + (top ? "╮" : "╯") + RESET + " ".repeat(shadow)
       : row("");
     const rows = [edge(true)];
-    for (const line of wrapLabel(this.#note.title, 2, inner)) rows.push(row(line, true));
+    for (const line of wrapLabel(this.#note.title.toUpperCase(), 2, inner)) {
+      rows.push(row(" ".repeat(Math.max(0, Math.floor((inner - visibleWidth(line)) / 2))) + line, true));
+    }
     rows.push(row(""));
     if (this.#note.tasks.length === 0) {
       for (const line of wrapLabel(WELCOME, 2, inner)) rows.push(row(line));

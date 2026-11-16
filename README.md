@@ -33,7 +33,8 @@ Remove it with `omp plugin uninstall omp-stickynote`, then restart OMP.
 ## How it works
 
 - **Automatic by default.** Uses the session title and follows the first three unfinished OMP todos in plan order. Once everything is complete, shows up to three completed tasks.
-- **A clean welcome.** Before a session title or tasks exist, shows **Ready to begin** and “Your project and next steps will appear here.” No working-directory name or automatic empty checkbox.
+- **A clean welcome.** Before a session title or tasks exist, shows **READY TO BEGIN** and “Your project and next steps will appear here.” No working-directory name or automatic empty checkbox.
+- **Readable at a glance.** Headlines are centered and displayed in all caps without changing the stored project title. Task checkboxes and labels stay left-aligned in their original case.
 - **Pinned to the live viewport.** Starts at the top-right and moves once to the top-center after actual transcript scrolling. A new session resets the position to the top-right.
 - **Keyboard stays yours.** No key capture, editor replacement, or extra prompt to dismiss.
 - **Session-local.** Manual notes and visibility are stored in OMP's session entries and restored on resume or branch navigation. Separate sessions do not share mutable note state. OMP controls persistence: a fresh session with no assistant turn may still be memory-only, and `--no-session` never saves it.

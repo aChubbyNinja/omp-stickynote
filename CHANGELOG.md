@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 — 2026-11-16
+
+- Center the headline and display it in all caps for better distance readability, in both native graphics and ANSI output.
+- Keep task checkbox alignment, label casing, typography, and spacing unchanged.
+
 ## 1.1.0 — 2026-11-16
 
 - Replace the automatic working-directory title and empty checkbox with **Ready to begin** and a short welcome until real session details arrive.

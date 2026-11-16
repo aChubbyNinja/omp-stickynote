@@ -27,8 +27,10 @@ export function paperSvg(note: Note): { svg: string; width: number; height: numb
   const text = (label: string, x: number, y: number, size: number, weight: number, color = "#292616") => {
     ink.push(`<text x="${x}" y="${y}" font-size="${size}" font-weight="${weight}" fill="${color}">${xml(label)}</text>`);
   };
-  const title = lines(note.title, 36, 436);
-  title.forEach((line, index) => text(line, 36, 62 + index * 44, 36, 800));
+  const title = lines(note.title.toUpperCase(), 36, 436);
+  ink.push('<g text-anchor="middle">');
+  title.forEach((line, index) => text(line, 256, 62 + index * 44, 36, 800));
+  ink.push("</g>");
   let y = 62 + (title.length - 1) * 44 + 48;
   if (note.tasks.length === 0) {
     const welcome = lines(WELCOME, 20, 436);
