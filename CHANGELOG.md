@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 — 2026-11-16
+
+- Keep startup and fitting titles at the existing width; widen centered graphic cards only when needed to avoid title truncation.
+- Expand evenly left and right by up to 33% of the original paper width per side, with a two-row title limit and ellipsis at the cap.
+- Preserve headline/task font sizes and task wrapping; restore the compact width when the title fits again.
+- Cover fitting, minimal expansion, viewport limits, maximum width, and ellipsis in the host-backed layout regression.
+- Rebuild the native version metadata when packaging a version-only companion update.
+
 ## 1.2.0 — 2026-11-16
 
 - Add an optional Linux/Hyprland desktop companion that keeps the note fixed during native terminal scrollback, without placing sticky-note images in terminal history.

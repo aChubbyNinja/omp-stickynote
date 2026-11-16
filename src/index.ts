@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { getCellDimensions, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
+import { getCellDimensions, TERMINAL, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
 import { cleanLabel, ENTRY_TYPE, parseSaved, restore, sessionTitle, type SavedNote, type Task } from "./state.ts";
 import { DesktopNote } from "./desktop.ts";
+import { headlineLayout, PAPER_WIDTH } from "./paper.ts";
 
 const WIDGET = "omp-stickynote.owner";
 const HELP = "/sticky Title | task one | task two | task three\n/sticky auto · /sticky hide · /sticky show · /sticky done 1";
@@ -32,6 +33,11 @@ export default function stickynote(pi: ExtensionAPI): void {
 
   function title(): string {
     return sessionTitle(pi.getSessionName() ?? "");
+  }
+
+  function overlayWidth(): number {
+    const width = centered && TERMINAL.imageProtocol ? headlineLayout(saved.manual?.title ?? title()).width : PAPER_WIDTH;
+    return Math.ceil(width / 10) + 2;
   }
 
   function restoreCursor(): string {
@@ -67,6 +73,8 @@ export default function stickynote(pi: ExtensionAPI): void {
     const content = saved.manual ?? { title: title(), tasks };
     note.update(content);
     desktop?.update(content);
+    const entry = tui?.overlayStack.find(item => item.component === note);
+    if (entry?.options) entry.options.width = overlayWidth();
     tui?.requestRender(true);
   }
 
@@ -83,7 +91,7 @@ export default function stickynote(pi: ExtensionAPI): void {
     const previous = tui.getFocused();
     overlay = tui.showOverlay(note, {
       anchor: centered ? "top-center" : "top-right",
-      width: 58,
+      width: overlayWidth(),
       margin: { top: 0, right: 2, left: 1, bottom: 4 },
       maxHeight: "100%",
     });
@@ -166,7 +174,10 @@ export default function stickynote(pi: ExtensionAPI): void {
           clearGraphics();
           centered = true;
           const entry = liveTui.overlayStack.find(item => item.component === ownedNote);
-          if (entry?.options) entry.options.anchor = "top-center";
+          if (entry?.options) {
+            entry.options.anchor = "top-center";
+            entry.options.width = overlayWidth();
+          }
           liveTui.requestRender(true);
           return;
         }
@@ -180,7 +191,7 @@ export default function stickynote(pi: ExtensionAPI): void {
         if (desktop) { paintDesktop(); return; }
         const graphics = ownedNote.graphicsRows;
         if (!graphics) return;
-        const width = Math.max(1, Math.min(58, frame.columns - 3));
+        const width = Math.max(1, Math.min(overlayWidth(), frame.columns - 3));
         const col = centered ? 1 + Math.floor((frame.columns - 3 - width) / 2) : frame.columns - 2 - width;
         const row = 0;
         // OMP 18.21 slices partial-overlay rows as text, corrupting SIXEL.

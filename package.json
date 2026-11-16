@@ -1,6 +1,6 @@
 {
   "name": "omp-stickynote",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A persistent yellow project sticky note for Oh My Pi terminal sessions.",
   "type": "module",
   "license": "MIT",

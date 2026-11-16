@@ -82,7 +82,7 @@ export class DesktopNote {
   #sentFrame?: DesktopFrame;
   #sentRasterKey?: string;
   #blocked = false;
-  #paper?: { rowHeight: number; svg: string; width: number; height: number };
+  #paper?: { rowHeight: number; maxWidth: number; svg: string; width: number; height: number };
   #desired?: RasterRequest;
   #raster?: { key: string; png: string };
   #running = false;
@@ -170,17 +170,20 @@ export class DesktopNote {
     const frame = this.#frame;
     if (!frame) return;
     if (frame.visible) {
-      const width = Math.max(1, Math.floor(Math.min(52, Math.max(1, frame.columns - 3)) * frame.cellWidthPx * PAPER_WIDTH / 520));
+      const baseScale = Math.min(52, Math.max(1, frame.columns - 3)) * frame.cellWidthPx / 520;
       const height = Math.max(1, Math.floor(Math.max(1, frame.rows - COMPOSER_ROWS) * frame.cellHeightPx));
-      const rowHeight = frame.cellHeightPx * PAPER_WIDTH / width;
-      if (this.#paper?.rowHeight !== rowHeight) {
-        this.#paper = { rowHeight, ...paperSvg(this.#note, rowHeight) };
+      const rowHeight = frame.cellHeightPx / baseScale;
+      // The startup card stays compact. Centered cards have equal room on both sides.
+      const maxWidth = frame.centered ? Math.max(1, frame.columns - 3) * frame.cellWidthPx / baseScale : PAPER_WIDTH;
+      if (this.#paper?.rowHeight !== rowHeight || this.#paper.maxWidth !== maxWidth) {
+        this.#paper = { rowHeight, maxWidth, ...paperSvg(this.#note, rowHeight, maxWidth) };
       }
       const paper = this.#paper;
+      const width = Math.max(1, Math.floor(paper.width * baseScale));
       const scale = Math.min(width / paper.width, height / paper.height);
       // Unconstrained row/column changes do not invalidate the PNG. A short window
       // lowers one uniform scale, without distorting the paper or adding a cell mat.
-      const key = `${this.#revision}/${rowHeight}/${scale}`;
+      const key = `${this.#revision}/${rowHeight}/${paper.width}/${scale}`;
       if (this.#desired?.key !== key) this.#desired = { key, svg: paper.svg, width, height, scale };
     }
     this.#flush();

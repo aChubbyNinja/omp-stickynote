@@ -126,7 +126,8 @@ export class StickyNote implements Component {
     if (this.#disposed || this.#running || !request || this.#failedKey === request.key || this.#imageKey === request.key) return;
     this.#running = true;
     try {
-      const paper = paperSvg(request.note, request.cell.heightPx * PAPER_WIDTH / request.widthPx);
+      const canvasWidth = Math.max(PAPER_WIDTH, (request.width - 2) * 10);
+      const paper = paperSvg(request.note, request.cell.heightPx * canvasWidth / request.widthPx, canvasWidth);
       // Permit HiDPI upscaling and pad to whole terminal cells, as the host's SvgFigure does.
       const scale = Math.max(1, request.widthPx / paper.width, request.heightPx / paper.height);
       const png = await rasterizeSvg(new TextEncoder().encode(paper.svg), request.widthPx, request.heightPx, scale, request.cell);

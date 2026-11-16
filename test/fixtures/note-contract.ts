@@ -3,10 +3,25 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL, visibleWidth } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "../../src/note.ts";
 import { cleanLabel } from "../../src/state.ts";
+import { headlineLayout, MAX_PAPER_WIDTH, PAPER_WIDTH } from "../../src/paper.ts";
 
 // Run inside OMP so the production renderer uses its actual bundled TUI helpers.
 // --trusted-extension makes an assertion failure abort startup with a nonzero exit.
 export default async function noteContract(pi: ExtensionAPI): Promise<void> {
+  const compact = headlineLayout("Release dashboard");
+  assert.equal(compact.width, PAPER_WIDTH, "A title that fits two rows must not widen the card");
+  assert.deepEqual(compact.lines, ["RELEASE", "DASHBOARD"]);
+  const expanded = headlineLayout("Build team dashboard");
+  assert.ok(expanded.width > PAPER_WIDTH && expanded.width < MAX_PAPER_WIDTH);
+  assert.equal(expanded.lines.join(" "), "BUILD TEAM DASHBOARD", "Expansion must recover the previously truncated title");
+  assert.equal(headlineLayout("Build team dashboard", expanded.width - 1).lines.length, 2);
+  assert.match(headlineLayout("Build team dashboard", expanded.width - 1).lines[1], /…$/, "Expansion must stop at the smallest fitting width");
+  const capped = headlineLayout("A very long project headline that cannot fit even after widening the sticky note");
+  assert.equal(capped.width, MAX_PAPER_WIDTH);
+  assert.equal(capped.lines.length, 2);
+  assert.match(capped.lines[1], /…$/);
+  assert.equal(headlineLayout("Build team dashboard", PAPER_WIDTH).width, PAPER_WIDTH, "Startup and narrow viewports must respect their width budget");
+  assert.equal(headlineLayout("Ship").width, PAPER_WIDTH, "A shorter replacement title must restore the compact width");
   const note = new StickyNote();
   for (const width of [20, 38, 64]) {
     const welcome = note.render(width);
