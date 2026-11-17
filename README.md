@@ -1,18 +1,34 @@
-# OMP Stickynote
+# OMP Sticky
 
 **Keep your project and next steps in view.**
 
 A yellow sticky note for an [Oh My Pi](https://github.com/can1357/oh-my-pi) terminal session, with a prominent project title and up to three task checkboxes. It starts at the top-right, then moves to the top-center as transcript output begins scrolling. On Hyprland, the desktop companion keeps it floating even while you browse native terminal scrollback.
 
-![OMP Stickynote pinned above scrolling terminal output](assets/terminal.png)
+![OMP Sticky pinned above scrolling terminal output](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/terminal.png)
 
 The welcome state stays quiet until there is real work to display:
 
-![OMP Stickynote welcoming a new session](assets/welcome.png)
+![OMP Sticky welcoming a new session](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/welcome.png)
 
 ## Install
 
-Requires **OMP 18.21.0**. The recommended desktop backend requires **Linux, Hyprland, Qt 6, and layer-shell-qt**. Other environments can use the terminal-only backend with the limitations below.
+Install into an existing OMP installation (tested with **18.21.0 and 18.22.0**):
+
+```sh
+omp install omp-sticky
+```
+
+Start a new `omp` session. On **Linux x86-64 with Hyprland**, the package includes the desktop companion: no source checkout, compiler, npm account, API key, or separate daemon startup is needed. Repeat the install command to update, then restart OMP.
+
+The desktop companion requires **Qt 6 and layer-shell-qt** at runtime. On Arch/Omarchy, install missing libraries with `sudo pacman -S --needed qt6-base qt6-declarative qt6-wayland layer-shell-qt`. The bundled binary targets current Arch/Omarchy; other distributions or CPU architectures may need a source build. Other compositors use the terminal-only backend with the limitations below.
+
+If you previously installed the checkout as `omp-stickynote`, first run `omp plugin uninstall omp-stickynote`, then install `omp-sticky` and restart OMP. Saved note state remains compatible.
+
+Remove it with `omp plugin uninstall omp-sticky`, then restart OMP.
+
+### Build from source
+
+For development or a system that cannot use the bundled companion:
 
 ```sh
 git clone https://github.com/aChubbyNinja/omp-stickynote.git
@@ -23,7 +39,7 @@ omp install .
 
 The companion build needs `qmake6`, a C++ compiler, `make`, Qt Quick/Wayland, and layer-shell-qt. On Arch/Omarchy, install missing prerequisites with `sudo pacman -S --needed base-devel qt6-base qt6-declarative qt6-wayland layer-shell-qt`.
 
-Start a new `omp` session. The extension automatically finds the compiled companion in the checkout, or `omp-stickynote-overlay` on `PATH`. No API key, npm install, desktop configuration changes, or separate daemon startup is needed. Keep the checkout in place: local installation links to it. Update with `git pull`, rebuild with `./native/bin/build`, then restart OMP.
+Start a new `omp` session. The extension looks for a source-built companion first, then a bundled binary for the current platform/architecture, then `omp-stickynote-overlay` on `PATH`. Keep the checkout in place: local installation links to it. Update with `git pull`, rebuild with `./native/bin/build`, then restart OMP.
 
 For an Arch package, run `./native/bin/package --install`. Its build directories are isolated from the project source. The package installs the companion; `omp install .` still installs the extension.
 
@@ -34,8 +50,6 @@ Try it without installing:
 ```sh
 omp -e /absolute/path/to/omp-stickynote/src/index.ts
 ```
-
-Remove it with `omp plugin uninstall omp-stickynote`, then restart OMP.
 
 ## How it works
 
@@ -79,7 +93,7 @@ The `|` character separates fields; labels cannot contain it in slash commands. 
 - The paper starts approximately 50 terminal columns wide, plus transparent shadow gutters. Long titles can widen the centered graphic card by up to 66%; task labels never trigger expansion. Graphics fit the actual available viewport, without an arbitrary 18-row height cap.
 - This is an overlay, not reserved layout space: the opaque paper covers output beneath it. `/sticky hide` reveals that output. The desktop card is not copied into terminal selections or scrollback; the original transcript remains intact.
 - Interactive TUI only. Print, JSON, RPC, and subagent sessions do not mount the note.
-- Desktop backend verified with Foot on Hyprland, Qt 6.12, and layer-shell-qt 6.8.1. The terminal backend targets OMP **18.21.0**. Other OMP releases and native Tern rendering are not verified.
+- Desktop backend verified with Foot on OMP 18.22.0, Hyprland, Qt 6.12, and layer-shell-qt 6.8.1. The terminal backend targets OMP **18.21.0**. Other OMP releases and native Tern rendering are not verified.
 - Terminal-server instances sharing one PID, remote SSH sessions, and multiplexers may not have an unambiguous compositor-window ancestor; the companion reports this rather than attaching to the wrong session. Other compositors currently use terminal rendering.
 
 The [native scrollback screenshot](assets/scrollback.png) shows the same card staying fixed over older output.
@@ -88,7 +102,7 @@ The terminal-only compatibility path uses OMP 18.21.0's exposed overlay stack to
 
 ## Development
 
-Development requires **Node.js 24+** and an installed **OMP 18.21.0** executable in `PATH`. Runtime dependencies are supplied by OMP.
+Development requires **Node.js 24+** and an installed `omp` executable in `PATH`. Type checking targets OMP **18.21.0**; runtime dependencies are supplied by OMP.
 
 ```sh
 npm ci --ignore-scripts
@@ -102,6 +116,8 @@ omp --no-extensions -e ./src/index.ts
 `src/state.ts` handles safe labels and branch-local restoration. `src/paper.ts` defines the shared typography and alpha-preserving SVG. `src/desktop.ts` manages cached PNG rendering and the companion's process/protocol lifecycle. `native/` owns the Qt surface, ancestor-PID matching, Hyprland IPC, visibility, and placement. `src/note.ts` supplies terminal rendering; `src/index.ts` owns backend selection and session commands.
 
 `npm test` exercises state restoration and real OMP text/SIXEL rendering; it finds the installed host rather than npm's dependency-local Bun CLI. Set `OMP_BIN=/absolute/path/to/omp` to select it explicitly. Native tests cover ownership ambiguity, placement, scaling, workspaces, and occlusion. Hosted CI is not configured.
+
+`npm pack` builds, checks the version, and strips the Linux x86-64 companion into the release tarball. Run it on a current Arch/Omarchy x86-64 build machine with the native build prerequisites installed. The published package does not run dependency installation scripts or download executables at startup.
 
 For integration changes, use a real terminal: type with the note visible, generate output, scroll back and forward with the terminal's own controls, hide/show, resize or move the window, and start a new session. Verify both the desktop path and `OMP_STICKY_RENDERER=terminal` fallback. Never publish screenshots containing private session content.
 

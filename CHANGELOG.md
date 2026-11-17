@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 — 2026-11-16
+
+- Publish as `omp-sticky`, enabling the short installation command `omp install omp-sticky`.
+- Bundle the Linux x86-64 desktop companion so current Omarchy installations no longer need a source checkout or compiler.
+- Select the companion by platform and architecture, retaining source builds, PATH discovery, and explicit terminal fallback.
+- Build and version-check the native executable during packaging; do not rely on dependency installation hooks.
+- Preserve saved note state when migrating from the previous `omp-stickynote` installation.
+
 ## 1.2.1 — 2026-11-16
 
 - Keep startup and fitting titles at the existing width; widen centered graphic cards only when needed to avoid title truncation.

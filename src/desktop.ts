@@ -49,6 +49,8 @@ function rendererPath(): string | undefined {
       !process.env.HYPRLAND_INSTANCE_SIGNATURE || !process.env.XDG_RUNTIME_DIR || !process.env.WAYLAND_DISPLAY) return;
   const bundled = fileURLToPath(new URL(`../native/build/${EXECUTABLE}`, import.meta.url));
   if (executable(bundled)) return bundled;
+  const prebuilt = fileURLToPath(new URL(`../native/prebuilt/${process.platform}-${process.arch}/${EXECUTABLE}`, import.meta.url));
+  if (executable(prebuilt)) return prebuilt;
   for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     const path = resolve(directory, EXECUTABLE);
     if (executable(path)) return path;

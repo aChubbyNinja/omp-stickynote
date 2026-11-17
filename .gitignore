@@ -5,3 +5,4 @@ native/build/
 native/pkgbuild/pkg/
 native/pkgbuild/src/
 native/pkgbuild/*.pkg.tar.*
+native/prebuilt/
