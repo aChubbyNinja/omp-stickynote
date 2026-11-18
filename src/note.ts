@@ -1,5 +1,7 @@
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
 import { getCellDimensions, getImageDimensions, Image, TERMINAL, truncateToWidth, visibleWidth, type Component } from "@oh-my-pi/pi-tui";
+import { effectLabels, semanticFrameKey, visualFrameKey } from "./art.ts";
+import type { VisualFrame } from "./effects.ts";
 import { PAPER_WIDTH, paperSvg, WELCOME, wrapLabel } from "./paper.ts";
 import { cleanLabel, type Note } from "./state.ts";
 
@@ -19,6 +21,7 @@ interface StickyNoteOptions {
 interface RasterRequest {
   key: string;
   note: Note;
+  fx?: VisualFrame;
   width: number;
   maxRows: number;
   widthPx: number;
@@ -29,6 +32,9 @@ interface RasterRequest {
 export class StickyNote implements Component {
   debugId = "omp-stickynote";
   #note: Note = { title: "Ready to begin", tasks: [] };
+  #fx?: VisualFrame;
+  #fxKey = "";
+  #semanticKey = "";
   #options: StickyNoteOptions;
   #revision = 0;
   #width = -1;
@@ -54,11 +60,18 @@ export class StickyNote implements Component {
     return !this.#disposed && this.#graphicsProtocol === TERMINAL.imageProtocol ? this.#graphicsRows : undefined;
   }
 
-  update(note: Note): void {
+  update(note: Note, fx?: VisualFrame): void {
     if (this.#disposed) return;
     const next = { title: cleanLabel(note.title), tasks: note.tasks.slice(0, 3).map(task => ({ text: cleanLabel(task.text), done: task.done })) };
-    if (next.title === this.#note.title && next.tasks.length === this.#note.tasks.length &&
-        next.tasks.every((task, i) => task.text === this.#note.tasks[i].text && task.done === this.#note.tasks[i].done)) return;
+    const fxKey = fx === this.#fx ? this.#fxKey : visualFrameKey(fx);
+    const semanticKey = fx === this.#fx ? this.#semanticKey : semanticFrameKey(fx);
+    const sameNote = next.title === this.#note.title && next.tasks.length === this.#note.tasks.length &&
+      next.tasks.every((task, i) => task.text === this.#note.tasks[i].text && task.done === this.#note.tasks[i].done);
+    const changed = !sameNote || (TERMINAL.imageProtocol ? fxKey !== this.#fxKey : semanticKey !== this.#semanticKey);
+    this.#fx = fx;
+    this.#fxKey = fxKey;
+    this.#semanticKey = semanticKey;
+    if (!changed) return;
     // Keep our own snapshot: asynchronous raster work must not observe caller mutations.
     this.#note = next;
     this.#revision++;
@@ -127,7 +140,7 @@ export class StickyNote implements Component {
     this.#running = true;
     try {
       const canvasWidth = Math.max(PAPER_WIDTH, (request.width - 2) * 10);
-      const paper = paperSvg(request.note, request.cell.heightPx * canvasWidth / request.widthPx, canvasWidth);
+      const paper = paperSvg(request.note, request.cell.heightPx * canvasWidth / request.widthPx, canvasWidth, request.fx);
       // Permit HiDPI upscaling and pad to whole terminal cells, as the host's SvgFigure does.
       const scale = Math.max(1, request.widthPx / paper.width, request.heightPx / paper.height);
       const png = await rasterizeSvg(new TextEncoder().encode(paper.svg), request.widthPx, request.heightPx, scale, request.cell);
@@ -174,7 +187,7 @@ export class StickyNote implements Component {
         this.#image = undefined;
         this.#imageKey = undefined;
         this.#desired = {
-          key, note: this.#note, width, maxRows,
+          key, note: this.#note, fx: this.#fx, width, maxRows,
           widthPx: Math.max(1, Math.floor(Math.max(1, width - 2) * cell.widthPx)),
           heightPx: Math.max(1, Math.floor(maxRows * cell.heightPx)),
           cell: { widthPx: cell.widthPx, heightPx: cell.heightPx },
@@ -237,6 +250,10 @@ export class StickyNote implements Component {
       for (let i = 0; i < lines.length; i++) {
         rows.push(row((i === 0 ? (task.done ? "[x] " : "[ ] ") : "    ") + lines[i], true));
       }
+    }
+    for (const label of effectLabels(this.#fx)) {
+      rows.push(row(""));
+      for (const line of wrapLabel(label, 2, inner)) rows.push(row(line, true));
     }
     rows.push(row(""), edge(false));
     if (shadow) rows.push(" " + SHADOW + " ".repeat(cardWidth) + RESET);

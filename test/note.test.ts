@@ -4,7 +4,7 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-test("empty and populated sticky notes render correctly in the real OMP runtime", () => {
+test("sticky notes and live office dashboard render correctly in the real OMP runtime", () => {
   // npm prepends the dev dependency's Bun-only CLI; exercise the installed host.
   const hostPath = process.env.PATH?.split(delimiter)
     .filter(entry => !entry.endsWith(join("node_modules", ".bin"))).join(delimiter);

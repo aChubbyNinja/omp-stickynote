@@ -10,9 +10,11 @@ The welcome state stays quiet until there is real work to display:
 
 ![OMP Sticky welcoming a new session](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/welcome.png)
 
+**Version 1.4.0 — 2026-11-17.** Quiet by default, with optional paper effects and a private LAN office board.
+
 ## Install
 
-Install into an existing OMP installation (tested with **18.21.0 and 18.22.0**):
+Install into an existing OMP installation (this release was tested with **Foot and OMP 18.22.2**):
 
 ```sh
 omp install omp-sticky
@@ -61,7 +63,7 @@ omp -e /absolute/path/to/omp-stickynote/src/index.ts
 - **A real soft shadow.** The desktop companion alpha-composites the paper and blurred shadow without a blank rectangular mat. Text remains visible through the shadow and around the rounded corners.
 - **Input stays yours.** The desktop surface accepts neither pointer nor keyboard input: clicking, selecting text, and scrolling still reach the terminal underneath.
 - **Session-local.** Manual notes and visibility are stored in OMP's session entries and restored on resume or branch navigation. Separate sessions do not share mutable note state. OMP controls persistence: a fresh session with no assistant turn may still be memory-only, and `--no-session` never saves it.
-- **No extra model calls.** The extension uses OMP's existing title and task state. It makes no network requests and adds no telemetry.
+- **No extra model calls or telemetry.** Ordinary notes and local effects do not use the network. Explicitly enabling office sharing sends encrypted LAN multicast snapshots and release waves; see [LAN office](#lan-office).
 
 ## Commands
 
@@ -81,8 +83,121 @@ omp -e /absolute/path/to/omp-stickynote/src/index.ts
 | `/sticky auto` | Return to the session title and live OMP todo list. |
 | `/sticky hide` / `/sticky show` | Hide or restore the note for this session. |
 | `/sticky` | Show command help. |
+| `/sticky fun on` / `/sticky fun off` | Enable or disable local paper effects; off by default, saved with this session branch. Does not change LAN sharing. |
+| `/sticky dnd` | Toggle a larger **DEEP WORK** fold-out sign. |
+| `/sticky dnd build` / `/sticky dnd off` | Show **WAITING ON A BUILD**, or restore the normal card. |
+| `/sticky crumple` | Animate dismissal without deleting the title or tasks; `/sticky show` restores them. |
+| `/sticky office on` / `/sticky office off` | Explicitly start or stop sharing this session on the configured LAN. |
+| `/sticky office board` | Open the office board after sharing has been enabled. |
 
 The `|` character separates fields; labels cannot contain it in slash commands. For those labels, ask the agent to use the `sticky_note` tool instead. The tool accepts a `title` and one to three `{ text, done }` tasks. Manual notes stay pinned until `/sticky auto`—automatic task updates do not overwrite them.
+
+## Paper effects and office features
+
+The normal note stays quiet by default. `/sticky fun on` enables local effects for the current session branch; DND, crumple, and office commands are separate explicit actions.
+
+1. **Victory moment.** Completing the note's remaining tasks under the same title briefly shows **SHIPPED** and confetti. This celebrates checkboxes, not a verified software release.
+2. **Curled paper and flutter.** A curled corner and brief flutter give real title/task changes and activity transitions a paper-like response.
+3. **Handwritten checks.** Completed checkboxes use varied ink strokes, briefly drawing newly completed marks.
+4. **Crumple and restore.** Dismiss the paper into a small crumpled ball, then restore the unchanged note with `/sticky show`. This works without fun mode.
+5. **Attention badges.** **READY**, **WORKING**, **YOUR TURN**, and **FINISHED** follow main-session activity, questions/approval requests, and completion. The waiting pulse is brief, not an endless animation.
+6. **Construction crew.** Small workers illustrate recognized builds and tests, followed by a brief **PASS** or **FAIL** result.
+7. **Milestone stamps.** **FIRST COMMIT**, **TESTS PASSED**, and **RELEASED** respond to supported command results, not words in a title or prompt.
+8. **Do-not-disturb sign.** A larger fold-out **DEEP WORK** or **WAITING ON A BUILD** sign keeps the original note intact and suppresses fun effects until DND is off.
+9. **LAN office board.** Explicitly share project titles, up to three tasks/check states, and attention status with a trusted group. `/sticky office board` opens a live, read-only dashboard.
+10. **Release wave.** A recognized successful release sends a brief wave to office peers. Enable fun on both machines for visible local effects; receiving a wave never retransmits it.
+
+![OMP Sticky paper effects in three states](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/paper-effects.png)
+
+### Fast local demo
+
+Enter these commands in an interactive OMP session, pausing after each checkbox to see the effect:
+
+```text
+/sticky fun on
+/sticky Release rehearsal | Prepare | Review | Finish
+/sticky done 1
+/sticky done 2
+/sticky done 3
+/sticky dnd
+/sticky dnd build
+/sticky dnd off
+/sticky crumple
+/sticky show
+```
+
+The third tick triggers the victory moment; it does not publish anything. `/sticky dnd` toggles deep work; `/sticky dnd build` selects the build sign explicitly. **Ctrl+Alt+D** also toggles deep work. To leave that shortcut unbound, start OMP with `OMP_STICKY_DND_SHORTCUT=off omp` and use the slash commands instead. DND is a visual sign, not an operating-system notification blocker, and does **not** stop office sharing.
+
+Finish with `/sticky fun off` to disable local effects, and `/sticky auto` to follow OMP todos again. Saved notes are not rewritten by animations; restoring or navigating branches does not replay old celebrations. Graphics backends show the artwork; ANSI fallback gives readable status labels rather than equivalent animation.
+
+### What activity signals mean
+
+Project effects follow actual title/task changes. Crew and milestone detection is deliberately narrower: it observes supported, literal **direct foreground `bash` tool calls in the main OMP session**, correlating the command with its real tool result. It does not monitor your other shells, arbitrary scripts, CI jobs, nested tool calls, subagents, or background services/jobs. Shell pipelines, wrappers, expansions, and compound commands are not general-purpose parsed; an optional literal `cd PATH &&` prefix is supported.
+
+Recognized examples include `npm test`, `npm run build` and equivalent pnpm/yarn/bun commands; Cargo and Go test/build commands; `node --test`, pytest, Jest, and `vitest run`. Help, dry-run, watch, listing, and other non-execution modes are excluded. A successful recognized test result produces **TESTS PASSED**; it is not a claim about coverage or the correctness of the tests themselves.
+
+**FIRST COMMIT** means the first observed successful `git commit` in the current activity lifecycle, not the repository's first-ever commit. **RELEASED** requires a successful supported npm/pnpm/yarn/Cargo publish or `gh release create` result with matching final publication evidence in its output. Draft, staged, dry-run, failed, cancelled, and still-running results do not count. Unrecognized output may produce no stamp. A title such as “release complete” or an assistant's claim cannot trigger a release stamp or office wave.
+
+## LAN office
+
+Office is **off by default**, independent of fun mode, and never starts just because environment variables exist. There is no cloud service, Internet rendezvous, or automatic pairing. All participants must be on the same multicast-capable IPv4 LAN and explicitly enable sharing.
+
+### Pair two machines privately
+
+Use **one shared random key** for the intended group, not a different key on each machine. On both machines, prepare a private directory:
+
+```sh
+install -d -m 700 "$HOME/.config/omp-sticky"
+```
+
+On **one machine only**, generate 32 random bytes encoded as 64 hexadecimal characters directly into a private file:
+
+```sh
+(umask 077; openssl rand -hex 32 > "$HOME/.config/omp-sticky/office.key")
+chmod 600 "$HOME/.config/omp-sticky/office.key"
+```
+
+Transfer that file privately to the second machine, for example over authenticated SSH after checking its host key (replace `user@peer`):
+
+```sh
+scp "$HOME/.config/omp-sticky/office.key" user@peer:.config/omp-sticky/office.key
+```
+
+Do not print or paste the key into shell commands/history, chat, screenshots, issue reports, or commits. Keep both copies owned by their user with mode **0600**; do not put the file in the project checkout. The transfer command contains a file path, not the secret.
+
+In **each machine's Bash shell**, load the key without echoing it and select that machine's actual LAN IPv4 address:
+
+```sh
+set +x
+chmod 600 "$HOME/.config/omp-sticky/office.key"
+export OMP_STICKY_OFFICE_KEY="$(cat "$HOME/.config/omp-sticky/office.key")"
+ip -4 address show
+read -r -p "This machine's LAN IPv4 address: " OMP_STICKY_OFFICE_INTERFACE
+export OMP_STICKY_OFFICE_INTERFACE
+# Optional display name; otherwise the hostname is used.
+export OMP_STICKY_OFFICE_NAME="Workstation"
+omp
+```
+
+Choose the address assigned to the intended Ethernet/Wi-Fi interface, not the other machine's address or a router address. Use a distinct optional name on each machine. Keep shell tracing off while loading secrets; the key is inherited by OMP and its child processes, so use only a trusted session.
+
+In OMP on **both machines**:
+
+```text
+/sticky fun on
+/sticky office on
+/sticky office board
+```
+
+The live, read-only board lists **SELF** and **REMOTE** sessions with names, project titles, tasks, and attention states. It updates automatically; use the arrow keys to scroll and **Escape** or **q** to close it without stopping sharing. Snapshots are coalesced to at most one per second with a five-second heartbeat. A recognized release on one peer sends a wave; manually ticking tasks to victory does not. Fun is needed for visible waves, not for the board or network sharing.
+
+### Network and trust boundaries
+
+- Transport is authenticated encryption (**AES-256-GCM**) to multicast group **239.255.77.80**, **UDP 47831**, **TTL 1**, through the explicitly selected interface. Allow that multicast traffic only on the intended LAN. Wi-Fi client isolation, VPNs, firewalls, or multicast filtering may prevent discovery; this is not cross-network/Internet sync.
+- Shared fields are a sanitized device name, ephemeral session identity, title, up to three task labels/check states, attention status, and protocol timing/sequence data. Prompts, transcripts, working directories, environment variables, and the key are not snapshot fields. **Titles and tasks can still be sensitive.**
+- The key authenticates a **trusted group**, not individual users or machines: any key holder can read group snapshots or impersonate another participant. Share only with trusted peers; revoke membership by stopping sharing and rotating the key on all remaining machines, then restarting OMP with the new key. TTL 1 is a routing constraint, not a security boundary.
+- `/sticky office off`, hiding, crumpling, leaving/switching the session, and branch navigation stop sharing. `/sticky show` does not re-enable it. A clean exit sends a best-effort leave message; after an unclean exit or lost message, peers may remain visible until their **20-second** expiry.
+- `/sticky fun off`, closing the board, or enabling DND does **not** stop sharing. Always use `/sticky office off` when you want the network session to end.
 
 ## Display and compatibility
 
@@ -93,7 +208,7 @@ The `|` character separates fields; labels cannot contain it in slash commands. 
 - The paper starts approximately 50 terminal columns wide, plus transparent shadow gutters. Long titles can widen the centered graphic card by up to 66%; task labels never trigger expansion. Graphics fit the actual available viewport, without an arbitrary 18-row height cap.
 - This is an overlay, not reserved layout space: the opaque paper covers output beneath it. `/sticky hide` reveals that output. The desktop card is not copied into terminal selections or scrollback; the original transcript remains intact.
 - Interactive TUI only. Print, JSON, RPC, and subagent sessions do not mount the note.
-- Desktop backend verified with Foot on OMP 18.22.0, Hyprland, Qt 6.12, and layer-shell-qt 6.8.1. The terminal backend targets OMP **18.21.0**. Other OMP releases and native Tern rendering are not verified.
+- This release was tested with **Foot and OMP 18.22.2** on Hyprland. The terminal backend targets OMP **18.21.0**. Other OMP releases and native Tern rendering remain unverified. Office transport was tested with two loopback sessions, not two physical computers; the two-machine LAN setup above is not a claim of physical-network verification.
 - Terminal-server instances sharing one PID, remote SSH sessions, and multiplexers may not have an unambiguous compositor-window ancestor; the companion reports this rather than attaching to the wrong session. Other compositors currently use terminal rendering.
 
 The [native scrollback screenshot](assets/scrollback.png) shows the same card staying fixed over older output.
@@ -113,9 +228,9 @@ npm test
 omp --no-extensions -e ./src/index.ts
 ```
 
-`src/state.ts` handles safe labels and branch-local restoration. `src/paper.ts` defines the shared typography and alpha-preserving SVG. `src/desktop.ts` manages cached PNG rendering and the companion's process/protocol lifecycle. `native/` owns the Qt surface, ancestor-PID matching, Hyprland IPC, visibility, and placement. `src/note.ts` supplies terminal rendering; `src/index.ts` owns backend selection and session commands.
+`src/state.ts` handles safe labels and branch-local restoration. `src/effects.ts` schedules finite local effects; `src/activity.ts` correlates host activity and supported command results. `src/art.ts` and `src/paper.ts` define artwork, shared typography, and alpha-preserving SVG. `src/office.ts` and `src/office-wire.ts` implement opt-in LAN transport and its authenticated packet format. `src/desktop.ts` manages cached PNG rendering and the companion's process/protocol lifecycle. `native/` owns the Qt surface, ancestor-PID matching, Hyprland IPC, visibility, and placement. `src/note.ts` supplies terminal rendering; `src/index.ts` owns backend selection and session commands.
 
-`npm test` exercises state restoration and real OMP text/SIXEL rendering; it finds the installed host rather than npm's dependency-local Bun CLI. Set `OMP_BIN=/absolute/path/to/omp` to select it explicitly. Native tests cover ownership ambiguity, placement, scaling, workspaces, and occlusion. Hosted CI is not configured.
+`npm test` covers state restoration, effects, activity-result correlation, office packets/transport, and real OMP text/SIXEL rendering; the rendering tests find the installed host rather than npm's dependency-local Bun CLI. Set `OMP_BIN=/absolute/path/to/omp` to select it explicitly. Native tests cover ownership ambiguity, placement, scaling, workspaces, and occlusion. Hosted CI is not configured.
 
 `npm pack` builds, checks the version, and strips the Linux x86-64 companion into the release tarball. Run it on a current Arch/Omarchy x86-64 build machine with the native build prerequisites installed. The published package does not run dependency installation scripts or download executables at startup.
 

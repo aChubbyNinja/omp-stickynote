@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.4.0 — 2026-11-17
+
+### Paper effects and office features
+
+1. **SHIPPED** and confetti when the note's remaining tasks become complete under the same title; this is a task celebration, not evidence of publication.
+2. Curled paper corners and brief flutter on note/activity changes.
+3. Varied handwritten checkbox strokes with brief draw-on completion marks.
+4. `/sticky crumple` dismissal and `/sticky show` restoration without deleting the note.
+5. Main-session attention badges for ready, working, waiting for input/approval, and finished.
+6. A construction crew for recognized foreground build/test tool calls and their pass/fail results.
+7. **FIRST COMMIT**, **TESTS PASSED**, and **RELEASED** stamps tied to supported actual command results, never title/prompt text. Release stamps additionally require final publication evidence.
+8. A larger **DEEP WORK** / **WAITING ON A BUILD** fold-out DND sign, controlled by `/sticky dnd`, `/sticky dnd build`, `/sticky dnd off`, or Ctrl+Alt+D. Set `OMP_STICKY_DND_SHORTCUT=off` before starting OMP to leave the shortcut unbound.
+9. Explicitly enabled LAN office sharing and a live, read-only mission-control board of peer projects, tasks, and attention states. Arrow keys scroll; Escape or q closes the board without stopping sharing.
+10. Brief peer waves from recognized successful releases, without wave retransmission.
+
+Local fun effects default off and are enabled with `/sticky fun on`; DND, crumple, and LAN sharing remain separate explicit actions. ANSI fallback provides readable status labels. Activity recognition is limited to monitored OMP main-session direct foreground `bash` calls, not arbitrary shells, scripts, CI, subagents, or background jobs.
+
+Office requires one privately shared 32-byte random group key and each machine's actual LAN IPv4 interface. It uses AES-256-GCM multicast at **239.255.77.80:47831/UDP**, **TTL 1**, with no cloud service. Key holders are a trusted group, not individually authenticated identities; titles/tasks may be sensitive and removing a member requires key rotation. Hiding, crumpling, session exit/switch, and branch navigation stop sharing; unclean departures expire after 20 seconds. Fun off, DND, and closing the board do not stop sharing.
+
+Update privacy guidance: the normal note and local effects make no network requests, but opt-in office mode sends encrypted LAN snapshots and release waves. Retain the existing install/update commands, saved note compatibility, bundled Linux x86-64 companion, and terminal fallback.
+
+### Reliability and compatibility
+
+- Recover from transient Hyprland IPC snapshot failures with bounded retries; keep the desktop surface hidden while ownership/visibility state is invalid.
+- Tested with **Foot and OMP 18.22.2** on Hyprland. Office transport was tested with **two loopback sessions**, not two physical computers; physical two-machine LAN behavior is not verified for this release.
+
 ## 1.3.0 — 2026-11-16
 
 - Publish as `omp-sticky`, enabling the short installation command `omp install omp-sticky`.

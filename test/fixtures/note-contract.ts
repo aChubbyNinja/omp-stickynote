@@ -4,6 +4,7 @@ import { ImageProtocol, setTerminalImageProtocol, TERMINAL, visibleWidth } from 
 import { StickyNote } from "../../src/note.ts";
 import { cleanLabel } from "../../src/state.ts";
 import { headlineLayout, MAX_PAPER_WIDTH, PAPER_WIDTH } from "../../src/paper.ts";
+import { OfficeBoard } from "../../src/board.ts";
 
 // Run inside OMP so the production renderer uses its actual bundled TUI helpers.
 // --trusted-extension makes an assertion failure abort startup with a nonzero exit.
@@ -44,6 +45,69 @@ export default async function noteContract(pi: ExtensionAPI): Promise<void> {
   assert.match(text, /RELEASE DASHBOARD/);
   assert.doesNotMatch(text, /\[[ x]\]/, "Clearing tasks must restore the empty state, not a blank checkbox");
   note.dispose();
+
+  const sessions = [
+    { id: "local123456", name: "Desk", self: true, snapshot: { title: "Dashboard", attention: "working" as const, tasks: [{ text: "Render cards", done: true }] } },
+    { id: "remote123456", name: "Laptop", self: false, snapshot: { title: "Release", attention: "waiting" as const, tasks: [{ text: "Review build", done: false }] } },
+  ];
+  const dashboard = new OfficeBoard({ sessions: () => sessions, rows: () => 24, requestRender() {}, close() {} });
+  const dashboardText = dashboard.render(80).join("\n");
+  for (const expected of ["SELF", "REMOTE", "Desk", "Laptop", "WORKING", "WAITING", "Dashboard", "Release", "[x] Render cards", "[ ] Review build"]) {
+    assert.ok(dashboardText.includes(expected), `Dashboard must display ${expected}`);
+  }
+  dashboard.dispose();
+
+  let requested = 0;
+  let closed = 0;
+  let boardSessions = Array.from({ length: 8 }, (_, i) => ({
+    id: String(i), name: `设备${i}`, self: i === 0,
+    snapshot: { title: `项目 👩‍💻 ${i} very long project description`, attention: "idle" as const,
+      tasks: [{ text: "检查 Unicode 内容 with a long readable task label", done: false }] },
+  }));
+  const scrolling = new OfficeBoard({
+    sessions: () => boardSessions, rows: () => 9,
+    requestRender() { requested++; }, close() { closed++; },
+  });
+  const firstPage = scrolling.render(24);
+  assert.equal(firstPage.length, 9);
+  assert.ok(firstPage.every(row => visibleWidth(row) <= 24), "Dashboard must bound Unicode rows in terminal cells");
+  scrolling.handleInput("j");
+  assert.notDeepEqual(scrolling.render(24), firstPage, "Arrow/vim scrolling must move the viewport");
+  scrolling.handleInput("\x1b[F");
+  assert.notDeepEqual(scrolling.render(24), firstPage, "End must reach later session cards");
+  scrolling.handleInput("\x1b[H");
+  assert.deepEqual(scrolling.render(24), firstPage, "Home must restore the first session");
+  boardSessions = [{ id: "fresh", name: "Fresh device", self: true,
+    snapshot: { title: "Updated project", attention: "idle", tasks: [] } }];
+  scrolling.refresh();
+  scrolling.handleInput("\x1b[H");
+  assert.ok(scrolling.render(40).join("\n").includes("Updated project"), "Refreshing must read current session snapshots");
+  scrolling.handleInput("q");
+  assert.equal(closed, 1, "q must close mission control");
+  scrolling.dispose();
+  const beforeDisposeRefresh = requested;
+  scrolling.refresh();
+  assert.equal(requested, beforeDisposeRefresh, "Disposed dashboards must stop requesting renders");
+
+  let height = 12;
+  const tiny = new OfficeBoard({
+    sessions: () => [{ id: "safe", name: "Desk", self: true,
+      snapshot: { title: "\x1b]52;c;secret\x07Safe project", attention: "idle", tasks: [] } }],
+    rows: () => height, requestRender() {}, close() {},
+  });
+  const safeText = tiny.render(40).join("\n");
+  assert.ok(safeText.includes("Safe project"));
+  assert.ok(!safeText.includes("secret"), "Untrusted labels must not inject terminal controls");
+  for (height of [1, 2, 3, 5]) {
+    for (const width of [1, 4, 12, 40]) {
+      const lines = tiny.render(width);
+      assert.equal(lines.length, height, "Dashboard must fit the real viewport height");
+      assert.ok(lines.every(row => visibleWidth(row) <= width), "Dashboard must fit the real viewport width");
+    }
+  }
+  height = 2;
+  assert.ok(tiny.render(40)[1]?.includes("Esc/q close"), "Tiny dashboards must keep the close hint visible");
+  tiny.dispose();
 
   // SIXEL must bypass the host's text slicer or it appears as escape-code debris.
   const previousProtocol = TERMINAL.imageProtocol;

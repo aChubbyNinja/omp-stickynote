@@ -4,11 +4,42 @@ import { StickyNote } from "./note.ts";
 import { cleanLabel, ENTRY_TYPE, parseSaved, restore, sessionTitle, type SavedNote, type Task } from "./state.ts";
 import { DesktopNote } from "./desktop.ts";
 import { headlineLayout, PAPER_WIDTH } from "./paper.ts";
+import { Effects, type VisualFrame } from "./effects.ts";
+import { registerActivity } from "./activity.ts";
+import { Office } from "./office.ts";
+import { OfficeBoard } from "./board.ts";
 
 const WIDGET = "omp-stickynote.owner";
-const HELP = "/sticky Title | task one | task two | task three\n/sticky auto · /sticky hide · /sticky show · /sticky done 1";
+const FUN_ENTRY = "omp-stickynote.fun";
+interface SavedFun {
+  version: 1;
+  enabled: boolean;
+}
+const HELP = [
+  "/sticky Title | task one | task two | task three",
+  "/sticky auto · /sticky hide · /sticky show · /sticky done 1",
+  "/sticky fun on|off — session-local effects (off by default)",
+  "/sticky dnd [build|off] — DEEP WORK / WAITING ON A BUILD; Ctrl+Alt+D toggles",
+  "/sticky crumple — dismiss visually; show restores the unchanged note",
+  "/sticky office on|off|board — explicitly opt into LAN sharing for this session",
+  "Hiding, crumpling or leaving the session turns office sharing off.",
+  "Set OMP_STICKY_DND_SHORTCUT=off before starting OMP to leave Ctrl+Alt+D unbound.",
+].join("\n");
+
+function restoredFun(entries: readonly unknown[]): boolean {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!entry || typeof entry !== "object") continue;
+    const custom = entry as { type?: unknown; customType?: unknown; data?: unknown };
+    if (custom.type !== "custom" || custom.customType !== FUN_ENTRY || !custom.data || typeof custom.data !== "object") continue;
+    const data = custom.data as { version?: unknown; enabled?: unknown };
+    if (data.version === 1 && typeof data.enabled === "boolean") return data.enabled;
+  }
+  return false;
+}
 
 export default function stickynote(pi: ExtensionAPI): void {
+  const dndShortcut = process.env.OMP_STICKY_DND_SHORTCUT !== "off";
   pi.setLabel("OMP Stickynote");
   let saved: SavedNote = { version: 1, hidden: false, manual: null };
   let tasks: Task[] = [];
@@ -24,19 +55,162 @@ export default function stickynote(pi: ExtensionAPI): void {
   let desktop: DesktopNote | undefined;
   let removePaintListener: (() => void) | undefined;
   let painted: { row: number; col: number; width: number; height: number } | undefined;
-  const noteOptions = {
-    requestRender: () => { clearGraphics(); tui?.requestRender(true); },
-    maxRows: () => Math.max(1, (tui?.terminal.rows ?? 24) - 7),
-    onError: (error: unknown) => current?.ui.notify(`Sticky note graphics unavailable: ${String(error)}`, "warning"),
-  };
-  let note = new StickyNote(noteOptions);
+  let lifecycle = 0;
+  let sessionId: string | undefined;
+  let crumpled = false;
+  let crumpling = false;
+  let fun = false;
+  let dnd: "DEEP WORK" | "WAITING ON A BUILD" | undefined;
+  let attention: VisualFrame["attention"] = "idle";
+  let fx: Effects | undefined;
+  let office: Office | undefined;
+  let officeReady = false;
+  let boardController: AbortController | undefined;
+  let boardOpen = false;
+  function noteOptions() {
+    const owner = lifecycle;
+    return {
+      requestRender: () => { if (owner === lifecycle) { clearGraphics(); tui?.requestRender(true); } },
+      maxRows: () => Math.max(1, (tui?.terminal.rows ?? 24) - 7),
+      onError: (error: unknown) => {
+        if (owner === lifecycle) current?.ui.notify(`Sticky note graphics unavailable: ${String(error)}`, "warning");
+      },
+    };
+  }
+  let note = new StickyNote(noteOptions());
 
   function title(): string {
-    return sessionTitle(pi.getSessionName() ?? "");
+    return sessionTitle(current?.sessionManager.getSessionName() ?? "");
+  }
+
+  function active(ctx: ExtensionContext): boolean {
+    return !!current && ctx.mode === "tui" && ctx.agent.kind === "main" &&
+      ctx.sessionManager.getSessionId() === sessionId &&
+      current.sessionManager.getSessionId() === sessionId;
+  }
+
+  function visible(): boolean {
+    return !saved.hidden && !crumpled;
+  }
+
+  function content() {
+    return saved.manual ?? { title: title(), tasks };
+  }
+
+  function stopSharing(): void {
+    boardController?.abort();
+    const previous = office;
+    office = undefined;
+    officeReady = false;
+    previous?.stop();
+  }
+
+  function share(): void {
+    if (visible() && !crumpling) office?.update({ ...content(), attention });
+    else stopSharing();
+  }
+
+  function contentChanged(baseline = false): void {
+    fx?.note(content(), baseline);
+    share();
+    paint();
+  }
+
+  function restoreCard(): void {
+    crumpled = false;
+    crumpling = false;
+    fx?.note(content(), true);
+  }
+
+  const activity = registerActivity(pi, {
+    active,
+    attention: value => { attention = value; fx?.attention(value); share(); },
+    crew: value => fx?.crew(value),
+    milestone: value => {
+      fx?.milestone(value);
+      if (value === "RELEASED" && officeReady) office?.release();
+    },
+  });
+
+  function setDnd(value: typeof dnd, ctx: ExtensionContext): void {
+    dnd = value;
+    fx?.dnd(value);
+    ctx.ui.notify(value ? `Sticky note: ${value}. Run /sticky dnd off to restore the card.` : "Sticky note: original card restored.", "info");
+  }
+
+  async function enableOffice(ctx: ExtensionContext): Promise<void> {
+    if (!visible() || crumpling) return ctx.ui.notify("Show the sticky note before enabling office sharing.", "warning");
+    if (office) return ctx.ui.notify(officeReady ? "Sticky office sharing is already on." : "Sticky office sharing is starting.", "info");
+    const owner = lifecycle;
+    const owned = new Office(
+      () => { if (owner === lifecycle && office === owned) fx?.wave(); },
+      error => {
+        if (owner !== lifecycle || office !== owned) return;
+        stopSharing();
+        ctx.ui.notify(`Sticky office sharing stopped: ${String(error)}`, "warning");
+      },
+    );
+    office = owned;
+    share();
+    try {
+      await owned.start();
+      if (owner !== lifecycle || office !== owned || !active(ctx) || !visible()) { owned.stop(); return; }
+      officeReady = true;
+      share();
+      ctx.ui.notify("Sticky office sharing is on for this session. /sticky office board opens mission control; /sticky office off stops sharing.", "info");
+    } catch (error) {
+      if (owner !== lifecycle || office !== owned) return;
+      stopSharing();
+      ctx.ui.notify(`Sticky office could not start: ${String(error)}`, "warning");
+    }
+  }
+
+  async function showBoard(ctx: ExtensionContext): Promise<void> {
+    const owned = office;
+    if (!owned || !officeReady) return ctx.ui.notify("Sticky office is off or still starting. Use /sticky office on to explicitly enable LAN sharing first.", "info");
+    const owner = lifecycle;
+    boardController?.abort();
+    const controller = new AbortController();
+    boardController = controller;
+    boardOpen = true;
+    unmount();
+    let board: OfficeBoard | undefined;
+    let refresh: NodeJS.Timeout | undefined;
+    try {
+      await ctx.ui.custom<void>((liveTui, _theme, _keybindings, done) => {
+        board = new OfficeBoard({
+          sessions: () => owned.sessions(),
+          rows: () => liveTui.terminal.rows,
+          requestRender: () => liveTui.requestRender(),
+          close: () => done(undefined),
+        });
+        refresh = ctx.setInterval(() => {
+          if (owner !== lifecycle || !active(ctx) || office !== owned) controller.abort();
+          else board?.refresh();
+        }, 1000);
+        return board;
+      }, {
+        overlay: true,
+        overlayOptions: { width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: false },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (!controller.signal.aborted && active(ctx)) {
+        ctx.ui.notify(`Sticky office board unavailable: ${String(error)}`, "warning");
+      }
+    } finally {
+      if (refresh !== undefined) ctx.clearTimer(refresh);
+      board?.dispose();
+      if (boardController === controller) {
+        boardController = undefined;
+        boardOpen = false;
+        if (owner === lifecycle && active(ctx)) { mount(); paint(); }
+      }
+    }
   }
 
   function overlayWidth(): number {
-    const width = centered && TERMINAL.imageProtocol ? headlineLayout(saved.manual?.title ?? title()).width : PAPER_WIDTH;
+    const width = centered && TERMINAL.imageProtocol ? headlineLayout(dnd ?? content().title).width : PAPER_WIDTH;
     return Math.ceil(width / 10) + 2;
   }
 
@@ -64,15 +238,16 @@ export default function stickynote(pi: ExtensionAPI): void {
     desktop.render({
       columns: tui.terminal.columns, rows: tui.terminal.rows,
       cellWidthPx: cell.widthPx, cellHeightPx: cell.heightPx,
-      centered, visible: visible && !saved.hidden,
+      centered, visible: visible && !saved.hidden && !crumpled && !boardOpen,
     });
   }
 
   function paint(): void {
     clearGraphics();
-    const content = saved.manual ?? { title: title(), tasks };
-    note.update(content);
-    desktop?.update(content);
+    if (!fx) return;
+    const next = content();
+    note.update(next, fx.frame);
+    desktop?.update(next, fx.frame);
     const entry = tui?.overlayStack.find(item => item.component === note);
     if (entry?.options) entry.options.width = overlayWidth();
     tui?.requestRender(true);
@@ -87,7 +262,7 @@ export default function stickynote(pi: ExtensionAPI): void {
   }
 
   function mount(): void {
-    if (!tui || saved.hidden || overlay || desktop) return;
+    if (!tui || !visible() || boardOpen || overlay || desktop) return;
     const previous = tui.getFocused();
     overlay = tui.showOverlay(note, {
       anchor: centered ? "top-center" : "top-right",
@@ -104,56 +279,94 @@ export default function stickynote(pi: ExtensionAPI): void {
   }
 
   function sync(ctx: ExtensionContext, force = false): void {
+    if (!active(ctx)) return;
     const leaf = ctx.sessionManager.getLeafId();
     const nextTitle = title();
     if (!force && leaf === lastLeaf && nextTitle === lastTitle) return;
     if (force || leaf !== lastLeaf) {
-      ({ saved, tasks } = restore(ctx.sessionManager.getBranch()));
+      const branch = ctx.sessionManager.getBranch();
+      ({ saved, tasks } = restore(branch));
+      const nextFun = restoredFun(branch);
+      if (fun !== nextFun) { fun = nextFun; fx?.fun(fun); }
       lastLeaf = leaf;
     }
     lastTitle = nextTitle;
-    if (saved.hidden) unmount();
+    if (!visible()) unmount();
     else mount();
-    paint();
+    contentChanged(force);
   }
 
   function save(ctx: ExtensionContext): void {
+    if (!active(ctx)) return;
     pi.appendEntry(ENTRY_TYPE, saved);
     lastLeaf = ctx.sessionManager.getLeafId();
-    if (saved.hidden) unmount();
+    if (!visible()) unmount();
     else mount();
-    paint();
+    contentChanged();
   }
 
   function stop(): void {
-    if (timer !== undefined) current?.clearTimer(timer);
+    lifecycle++;
+    const previous = current;
+    current = undefined;
+    sessionId = undefined;
+    stopSharing();
+    boardController = undefined;
+    boardOpen = false;
+    activity.reset();
+    fx?.dispose();
+    fx = undefined;
+    if (timer !== undefined) previous?.clearTimer(timer);
     timer = undefined;
     removePaintListener?.();
     removePaintListener = undefined;
+    unmount();
     desktop?.dispose();
     desktop = undefined;
     note.dispose();
-    unmount();
     tui = undefined;
+    lastLeaf = undefined;
+    lastTitle = undefined;
+    crumpled = false;
+    crumpling = false;
+    fun = false;
+    dnd = undefined;
+    attention = "idle";
   }
 
   function start(ctx: ExtensionContext): void {
-    if (ctx.mode !== "tui" || ctx.agent.kind !== "main") return;
+    if (ctx.agent.kind !== "main") return;
+    if (ctx.mode !== "tui") { stop(); return; }
     stop();
     current = ctx;
+    sessionId = ctx.sessionManager.getSessionId();
+    const owner = lifecycle;
+    fx = new Effects(
+      () => { if (owner === lifecycle) paint(); },
+      () => {
+        if (owner !== lifecycle) return;
+        crumpled = true;
+        crumpling = false;
+        stopSharing();
+        unmount();
+      },
+    );
     centered = false;
     hasStarted = false;
     historyRows = 0;
-    note = new StickyNote(noteOptions);
+    note = new StickyNote(noteOptions());
     sync(ctx, true);
+    const conflict = dndShortcut && typeof pi.getShortcutConflict === "function" ? pi.getShortcutConflict("ctrl+alt+d") : undefined;
+    if (conflict) ctx.ui.notify("Ctrl+Alt+D is already assigned in OMP. Set OMP_STICKY_DND_SHORTCUT=off before starting OMP to keep its existing binding; use /sticky dnd.", "warning");
     ctx.ui.setWidget(WIDGET, liveTui => {
+      if (owner !== lifecycle || !active(ctx)) return { render: () => [] };
       tui = liveTui;
       const ownedNote = note;
       if (DesktopNote.available()) {
         desktop = new DesktopNote({
-          onReady: () => { if (note === ownedNote) paint(); },
+          onReady: () => { if (owner === lifecycle && note === ownedNote) paint(); },
           onError: error => {
-            if (note !== ownedNote) return;
+            if (owner !== lifecycle || note !== ownedNote) return;
             const failed = desktop;
             desktop = undefined;
             failed?.dispose();
@@ -167,9 +380,10 @@ export default function stickynote(pi: ExtensionAPI): void {
         ctx.ui.notify("Sticky note is using terminal rendering. Build native/bin/build in the extension checkout for a scrollback-safe desktop overlay.", "info");
       }
       removePaintListener = liveTui.addPaintListener(frame => {
+        if (owner !== lifecycle || !active(ctx)) return;
         if (frame.reset) historyRows = 0;
         historyRows += frame.history.length;
-        if (frame.alt || saved.hidden) { paintDesktop(false); return; }
+        if (frame.alt || boardOpen || !visible()) { paintDesktop(false); return; }
         if (hasStarted && !centered && historyRows + frame.viewport.length > frame.rows) {
           clearGraphics();
           centered = true;
@@ -208,37 +422,82 @@ export default function stickynote(pi: ExtensionAPI): void {
       });
       mount();
       paint();
-      const owner: Component = {
+      const component: Component = {
         render: () => [],
-        dispose: () => { if (note === ownedNote) stop(); else ownedNote.dispose(); },
+        dispose: () => { if (owner === lifecycle && note === ownedNote) stop(); else ownedNote.dispose(); },
       };
-      return owner;
+      return component;
     });
     // Detect asynchronous session renames and manual edits in OMP's task board.
     // The branch is read only when its leaf changes, not on every repaint.
-    timer = ctx.setInterval(() => sync(ctx), 750);
+    timer = ctx.setInterval(() => { if (owner === lifecycle) sync(ctx); }, 750);
   }
 
   pi.on("session_start", (_event, ctx) => start(ctx));
   pi.on("session_switch", (_event, ctx) => start(ctx));
   pi.on("session_branch", (_event, ctx) => start(ctx));
   pi.on("session_tree", (_event, ctx) => start(ctx));
-  pi.on("session_shutdown", () => stop());
+  pi.on("session_clear", (_event, ctx) => start(ctx));
+  pi.on("session_shutdown", (_event, ctx) => { if (active(ctx)) stop(); });
   pi.on("input", (event, ctx) => {
-    if (ctx.agent.kind === "main" && !event.text.trimStart().startsWith("/")) hasStarted = true;
+    if (active(ctx) && !event.text.trimStart().startsWith("/")) hasStarted = true;
   });
   pi.on("before_agent_start", (_event, ctx) => {
-    if (ctx.agent.kind === "main") hasStarted = true;
+    if (active(ctx)) hasStarted = true;
+  });
+
+  if (dndShortcut) pi.registerShortcut("ctrl+alt+d", {
+    description: "Toggle sticky note DEEP WORK card",
+    handler: ctx => {
+      if (!active(ctx)) return;
+      if (typeof pi.getShortcutConflict === "function" && pi.getShortcutConflict("ctrl+alt+d")) {
+        ctx.ui.notify("Ctrl+Alt+D is already assigned in OMP. Set OMP_STICKY_DND_SHORTCUT=off before starting OMP; use /sticky dnd or /sticky dnd off.", "warning");
+        return;
+      }
+      setDnd(dnd ? undefined : "DEEP WORK", ctx);
+    },
   });
 
   pi.registerCommand("sticky", {
-    description: "Pin a project title and 1–3 tasks; auto, hide, show, or done N",
+    description: "Pin a title/tasks; auto, hide, show, done N, fun, dnd, crumple, office",
     handler: async (args, ctx) => {
-      if (ctx.mode !== "tui") return ctx.ui.notify("Stickynote needs an interactive OMP terminal.", "warning");
+      if (!active(ctx)) return ctx.ui.notify("Stickynote needs the active main interactive OMP terminal.", "warning");
       sync(ctx);
       const input = args.trim();
-      if (!input) return ctx.ui.notify(HELP, "info");
-      if (input === "hide" || input === "show") saved = { ...saved, hidden: input === "hide" };
+      if (!input || input === "help") return ctx.ui.notify(HELP, "info");
+      if (input === "fun on" || input === "fun off") {
+        fun = input === "fun on";
+        const preference: SavedFun = { version: 1, enabled: fun };
+        pi.appendEntry(FUN_ENTRY, preference);
+        lastLeaf = ctx.sessionManager.getLeafId();
+        fx?.fun(fun);
+        return ctx.ui.notify(`Sticky note fun is ${fun ? "on for this session" : "off"}. LAN sharing is unchanged.`, "info");
+      }
+      if (input === "dnd" || input === "dnd build" || input === "dnd off") {
+        return setDnd(input === "dnd off" ? undefined : input === "dnd build" ? "WAITING ON A BUILD" : dnd ? undefined : "DEEP WORK", ctx);
+      }
+      if (input === "crumple") {
+        if (!visible() || crumpling) return ctx.ui.notify("The sticky note is already dismissed or crumpling. Use /sticky show to restore it.", "info");
+        stopSharing();
+        crumpling = true;
+        fx?.crumple();
+        return ctx.ui.notify("Sticky note crumpled. /sticky show restores the unchanged note.", "info");
+      }
+      if (input === "office on") return enableOffice(ctx);
+      if (input === "office off") {
+        stopSharing();
+        return ctx.ui.notify("Sticky office sharing is off.", "info");
+      }
+      if (input === "office board") return showBoard(ctx);
+      if (input === "fun" || input === "office") {
+        return ctx.ui.notify(HELP, "info");
+      }
+      const wasSharing = office !== undefined;
+      if (input === "hide" || input === "show") {
+        saved = { ...saved, hidden: input === "hide" };
+        if (input === "show") restoreCard();
+        else if (crumpling) { crumpling = false; fx?.note(content(), true); }
+      }
       else if (input === "auto") saved = { ...saved, manual: null };
       else if (/^done\s+[1-3]$/.test(input)) {
         const selected = Number(input.split(/\s+/)[1]) - 1;
@@ -249,8 +508,10 @@ export default function stickynote(pi: ExtensionAPI): void {
         const [heading, ...items] = input.split("|").map(cleanLabel);
         if (!heading || items.length > 3 || items.some(item => !item)) return ctx.ui.notify(HELP, "warning");
         saved = { version: 1, hidden: false, manual: { title: heading, tasks: (items.length ? items : [""]).map(text => ({ text, done: false })) } };
+        if (crumpled || crumpling) restoreCard();
       }
       save(ctx);
+      if (input === "hide" && wasSharing) ctx.ui.notify("Sticky note hidden; office sharing is off.", "info");
     },
   });
 
@@ -263,11 +524,20 @@ export default function stickynote(pi: ExtensionAPI): void {
       tasks: pi.zod.array(pi.zod.object({ text: pi.zod.string().min(1).max(160), done: pi.zod.boolean() })).min(1).max(3),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
+      if (ctx.agent.kind !== "main") throw new Error("Sticky note updates are only available to the main session.");
       const parsed = parseSaved({ version: 1, hidden: false, manual: params });
       const manual = parsed?.manual;
       if (!manual?.title || manual.tasks.some(task => !task.text)) throw new Error("Sticky note labels must contain visible text.");
-      saved = { version: 1, hidden: false, manual };
-      save(ctx);
+      const next: SavedNote = { version: 1, hidden: false, manual };
+      if (ctx.mode === "tui") {
+        if (!active(ctx)) throw new Error("Sticky note updates require the active main interactive OMP session.");
+        sync(ctx);
+        saved = next;
+        if (crumpled || crumpling) restoreCard();
+        save(ctx);
+      } else {
+        pi.appendEntry(ENTRY_TYPE, next);
+      }
       return { content: [{ type: "text", text: "Sticky note updated." }], details: manual };
     },
   });

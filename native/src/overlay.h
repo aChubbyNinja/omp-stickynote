@@ -40,6 +40,7 @@ private:
     void refresh();
     void query(const QByteArray &command);
     void queryFinished();
+    void retrySnapshot(const QString &diagnostic);
     void applyState();
     void createSurface(QScreen *screen);
     void announceReady();
@@ -50,14 +51,16 @@ private:
     QVector<qint64> m_ancestors;
     QString m_socketDirectory;
     QString m_ownerAddress;
-    QJsonArray m_clients, m_monitors;
+    QJsonArray m_clients, m_monitors, m_pendingClients;
     QLocalSocket m_events, m_query;
     QByteArray m_reply, m_eventBuffer, m_input;
     QByteArray m_command;
-    QTimer m_refreshTimer, m_debounce, m_queryDeadline, m_startupDeadline, m_parentTimer;
+    QTimer m_refreshTimer, m_debounce, m_queryDeadline, m_retryTimer, m_startupDeadline, m_parentTimer;
     std::unique_ptr<QSocketNotifier> m_stdinNotifier, m_parentNotifier;
     int m_pidfd = -1;
-    bool m_querying = false, m_refreshPending = false, m_ready = false, m_failed = false;
+    bool m_querying = false, m_queryActive = false, m_snapshotValid = false;
+    bool m_refreshPending = false, m_ready = false, m_failed = false;
+    int m_snapshotAttempts = 0;
     bool m_stdinOpen = true, m_visible = false, m_centered = false;
     int m_columns = 0, m_transparentTop = 0;
     double m_cellWidth = 0, m_cellHeight = 0;

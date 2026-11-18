@@ -23,9 +23,11 @@
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <utility>
 
 namespace {
 constexpr qsizetype MaxFrameBytes = 32 * 1024 * 1024;
+constexpr int MaxSnapshotAttempts = 3;
 
 QByteArray processStat(qint64 pid)
 {
@@ -112,11 +114,16 @@ Overlay::Overlay(qint64 parentPid, QObject *parent) : QObject(parent), m_parentP
     m_debounce.setInterval(20);
     m_queryDeadline.setSingleShot(true);
     m_queryDeadline.setInterval(1500);
+    m_retryTimer.setSingleShot(true);
     m_startupDeadline.setSingleShot(true);
     m_startupDeadline.setInterval(5000);
     connect(&m_debounce, &QTimer::timeout, this, &Overlay::refresh);
     connect(&m_refreshTimer, &QTimer::timeout, this, &Overlay::scheduleRefresh);
-    connect(&m_queryDeadline, &QTimer::timeout, this, [this] { fail(QStringLiteral("Hyprland IPC request timed out")); });
+    connect(&m_retryTimer, &QTimer::timeout, this, [this] { query("j/clients"); });
+    connect(&m_queryDeadline, &QTimer::timeout, this, [this] {
+        retrySnapshot(QStringLiteral("Hyprland %1 response timed out (%2 bytes)")
+                          .arg(QString::fromLatin1(m_command)).arg(m_reply.size()));
+    });
     connect(&m_startupDeadline, &QTimer::timeout, this, [this] {
         fail(m_ownerAddress.isEmpty() ? QStringLiteral("No Hyprland window belongs to the OMP process ancestry")
                                     : QStringLiteral("Layer-shell surface did not initialize"));
@@ -130,10 +137,13 @@ Overlay::Overlay(qint64 parentPid, QObject *parent) : QObject(parent), m_parentP
             m_eventBuffer.remove(0, end + 1);
             // Hide immediately during transitions; the next snapshot decides
             // whether the owner remains visible, without changing compositor state.
-            if (m_ready && m_window && (event.startsWith("workspace>>") || event.startsWith("workspacev2>>")
+            if (event.startsWith("workspace>>") || event.startsWith("workspacev2>>")
                 || event.startsWith("activespecial") || event.startsWith("fullscreen>>")
-                || event.startsWith("closewindow>>")))
-                m_window->hide();
+                || event.startsWith("closewindow>>")) {
+                m_snapshotValid = false;
+                if (m_window)
+                    m_window->hide();
+            }
             scheduleRefresh();
         }
         if (m_eventBuffer.size() > 1024 * 1024)
@@ -145,13 +155,22 @@ Overlay::Overlay(qint64 parentPid, QObject *parent) : QObject(parent), m_parentP
     connect(&m_events, &QLocalSocket::disconnected, this, [this] {
         fail(QStringLiteral("Hyprland event socket closed"));
     });
-    connect(&m_query, &QLocalSocket::connected, this, [this] { m_query.write(m_command); });
+    connect(&m_query, &QLocalSocket::connected, this, [this] {
+        // Hyprland reads one short command, without a newline or NUL, then
+        // closes the connection to delimit its reply.
+        if (m_query.write(m_command) != m_command.size())
+            fail(QStringLiteral("Cannot write the Hyprland IPC request"));
+    });
     connect(&m_query, &QLocalSocket::readyRead, this, [this] {
+        if (!m_queryActive || m_failed)
+            return;
         m_reply += m_query.readAll();
         if (m_reply.size() > MaxFrameBytes)
             fail(QStringLiteral("Hyprland IPC response is too large"));
     });
-    connect(&m_query, &QLocalSocket::disconnected, this, &Overlay::queryFinished);
+    // QLocalSocket still unwinds its underlying socket's disconnect handling
+    // after this signal. Drain and reconnect only once that stack has returned.
+    connect(&m_query, &QLocalSocket::disconnected, this, &Overlay::queryFinished, Qt::QueuedConnection);
     connect(&m_query, &QLocalSocket::errorOccurred, this, [this](QLocalSocket::LocalSocketError error) {
         if (error != QLocalSocket::PeerClosedError)
             fail(QStringLiteral("Hyprland command socket: %1").arg(m_query.errorString()));
@@ -354,43 +373,105 @@ void Overlay::refresh()
         m_refreshPending = true;
         return;
     }
+    m_snapshotAttempts = 1;
     query("j/clients");
 }
 
 void Overlay::query(const QByteArray &command)
 {
+    if (m_failed)
+        return;
     m_querying = true;
+    m_queryActive = true;
     m_command = command;
     m_reply.clear();
-    m_queryDeadline.start();
+    // One deadline covers both halves of the snapshot, not each connection.
+    if (command == "j/clients")
+        m_queryDeadline.start();
     m_query.connectToServer(m_socketDirectory + "/.socket.sock");
 }
 
 void Overlay::queryFinished()
 {
-    if (m_failed || !m_querying)
+    if (m_failed || !m_queryActive)
         return;
-    m_queryDeadline.stop();
+    m_queryActive = false;
     m_reply += m_query.readAll();
+    if (m_reply.size() > MaxFrameBytes) {
+        fail(QStringLiteral("Hyprland IPC response is too large"));
+        return;
+    }
     QJsonParseError error;
     const auto document = QJsonDocument::fromJson(m_reply, &error);
     if (error.error != QJsonParseError::NoError || !document.isArray()) {
-        fail(QStringLiteral("Invalid Hyprland %1 response").arg(QString::fromLatin1(m_command)));
+        retrySnapshot(QStringLiteral("Invalid Hyprland %1 response (%2 bytes, JSON error %3: %4, offset %5, root %6)")
+                          .arg(QString::fromLatin1(m_command)).arg(m_reply.size())
+                          .arg(int(error.error)).arg(error.errorString()).arg(error.offset)
+                          .arg(document.isObject() ? QStringLiteral("object") : QStringLiteral("none")));
         return;
+    }
+    auto entries = document.array();
+    for (const auto &entry : entries) {
+        if (!entry.isObject()) {
+            retrySnapshot(QStringLiteral("Invalid Hyprland %1 response (%2 bytes, non-object array entry)")
+                              .arg(QString::fromLatin1(m_command)).arg(m_reply.size()));
+            return;
+        }
     }
     if (m_command == "j/clients") {
-        m_clients = document.array();
-        // Reconnect outside the disconnected signal's stack.
-        QTimer::singleShot(0, this, [this] { if (!m_failed) query("j/monitors"); });
+        m_pendingClients = std::move(entries);
+        if (!m_ownerAddress.isEmpty()) {
+            bool found = false;
+            for (const auto &entry : m_pendingClients) {
+                if (entry.toObject().value("address").toString() == m_ownerAddress) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                retrySnapshot(QStringLiteral("Hyprland clients snapshot omits the owner (%1 bytes)").arg(m_reply.size()));
+                return;
+            }
+        }
+        query("j/monitors");
         return;
     }
-    m_monitors = document.array();
+    m_queryDeadline.stop();
+    // Publish a pair together. Frames arriving between requests must never
+    // combine new clients with an old monitor layout.
+    m_clients = std::move(m_pendingClients);
+    m_monitors = std::move(entries);
+    m_snapshotValid = true;
     m_querying = false;
     applyState();
     if (m_refreshPending) {
         m_refreshPending = false;
         scheduleRefresh();
     }
+}
+
+void Overlay::retrySnapshot(const QString &diagnostic)
+{
+    if (m_failed)
+        return;
+    m_snapshotValid = false;
+    if (m_window)
+        m_window->hide();
+    m_queryDeadline.stop();
+    m_queryActive = false;
+    m_query.abort();
+    m_pendingClients = {};
+    if (m_snapshotAttempts >= MaxSnapshotAttempts) {
+        fail(QStringLiteral("%1; failed after %2 snapshot attempts").arg(diagnostic).arg(m_snapshotAttempts));
+        return;
+    }
+    const int delay = 50 * m_snapshotAttempts;
+    std::fprintf(stderr, "omp-stickynote-overlay: %s; retrying snapshot %d/%d in %d ms\n",
+                 qPrintable(diagnostic), m_snapshotAttempts + 1, MaxSnapshotAttempts, delay);
+    ++m_snapshotAttempts;
+    // Keep m_querying set while backing off so event/poll refreshes cannot
+    // bypass the retry limit. The startup deadline remains independent.
+    m_retryTimer.start(delay);
 }
 
 void Overlay::announceReady()
@@ -452,6 +533,11 @@ void Overlay::applyState()
 {
     if (m_failed)
         return;
+    if (!m_snapshotValid) {
+        if (m_window)
+            m_window->hide();
+        return;
+    }
     QJsonObject owner;
     if (m_ownerAddress.isEmpty()) {
         const auto result = DesktopState::findOwner(m_clients, m_ancestors);

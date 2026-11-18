@@ -4,6 +4,8 @@ import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
 import { getImageDimensions } from "@oh-my-pi/pi-tui";
+import { visualFrameKey } from "./art.ts";
+import type { VisualFrame } from "./effects.ts";
 import { PAPER_WIDTH, paperSvg } from "./paper.ts";
 import { cleanLabel, type Note } from "./state.ts";
 
@@ -79,6 +81,8 @@ export class DesktopNote {
   #stdout = "";
   #stderr = "";
   #note: Note = { title: "Ready to begin", tasks: [] };
+  #fx?: VisualFrame;
+  #fxKey = "";
   #revision = 0;
   #frame?: DesktopFrame;
   #sentFrame?: DesktopFrame;
@@ -125,14 +129,18 @@ export class DesktopNote {
     return this.#ready && !this.#disposed && !this.#failed;
   }
 
-  update(note: Note): void {
+  update(note: Note, fx?: VisualFrame): void {
     if (this.#disposed || this.#failed) return;
     const next: Note = {
       title: cleanLabel(note.title),
       tasks: note.tasks.slice(0, 3).map(task => ({ text: cleanLabel(task.text), done: task.done })),
     };
-    if (next.title === this.#note.title && next.tasks.length === this.#note.tasks.length &&
-        next.tasks.every((task, index) => task.text === this.#note.tasks[index].text && task.done === this.#note.tasks[index].done)) return;
+    const fxKey = fx === this.#fx ? this.#fxKey : visualFrameKey(fx);
+    const sameNote = next.title === this.#note.title && next.tasks.length === this.#note.tasks.length &&
+      next.tasks.every((task, index) => task.text === this.#note.tasks[index].text && task.done === this.#note.tasks[index].done);
+    this.#fx = fx;
+    if (sameNote && fxKey === this.#fxKey) return;
+    this.#fxKey = fxKey;
     this.#note = next;
     this.#revision++;
     this.#paper = undefined;
@@ -178,7 +186,7 @@ export class DesktopNote {
       // The startup card stays compact. Centered cards have equal room on both sides.
       const maxWidth = frame.centered ? Math.max(1, frame.columns - 3) * frame.cellWidthPx / baseScale : PAPER_WIDTH;
       if (this.#paper?.rowHeight !== rowHeight || this.#paper.maxWidth !== maxWidth) {
-        this.#paper = { rowHeight, maxWidth, ...paperSvg(this.#note, rowHeight, maxWidth) };
+        this.#paper = { rowHeight, maxWidth, ...paperSvg(this.#note, rowHeight, maxWidth, this.#fx) };
       }
       const paper = this.#paper;
       const width = Math.max(1, Math.floor(paper.width * baseScale));
