@@ -14,13 +14,13 @@ Local paper effects are on by default. The private LAN office board is opt-in.
 
 ## Install
 
-Install into an existing OMP installation (this release was tested with **Foot and OMP 18.22.2**):
+Install into an existing OMP installation:
 
 ```sh
 omp install omp-sticky
 ```
 
-Start a new `omp` session. On **Linux x86-64 with Hyprland**, the package includes the desktop companion: no source checkout, compiler, npm account, API key, or separate daemon startup is needed. Repeat the install command to update, then restart OMP.
+Start a new `omp` session. On **Linux x86-64 with Hyprland**, the package includes the desktop companion: no source checkout, compiler, npm account, API key, or separate daemon startup is needed. To update an existing npm install, run `omp plugin upgrade omp-sticky`, then restart OMP.
 
 The desktop companion requires **Qt 6 and layer-shell-qt** at runtime. On Arch/Omarchy, install missing libraries with `sudo pacman -S --needed qt6-base qt6-declarative qt6-wayland layer-shell-qt`. The bundled binary targets current Arch/Omarchy; other distributions or CPU architectures may need a source build. Other compositors use the terminal-only backend with the limitations below.
 
@@ -96,12 +96,12 @@ The `|` character separates fields; labels cannot contain it in slash commands. 
 
 New sessions start in fun mode. Resuming a branch restores its last explicit preference, including an opt-out saved in an earlier version. DND, crumple, and office sharing remain separate actions.
 
-1. **Victory moment.** Completing the note's remaining tasks under the same title briefly shows **SHIPPED** and confetti. This celebrates checkboxes, not a verified software release.
+1. **Victory moment.** Completing the remaining tasks under the same title shows **SHIPPED** and confetti for 3.6 seconds. Automatic notes follow the whole OMP checklist, even when more than three tasks finish together; only three rows are displayed. This celebrates checkboxes, not a software release.
 2. **Curled paper and flutter.** A curled corner and brief flutter give real title/task changes and activity transitions a paper-like response.
 3. **Handwritten checks.** Completed checkboxes use varied ink strokes, briefly drawing newly completed marks.
 4. **Crumple and restore.** Dismiss the paper into a small crumpled ball, then restore the unchanged note with `/sticky show`. This works without fun mode.
 5. **Attention badges.** **READY**, **WORKING**, **YOUR TURN**, and **FINISHED** follow main-session activity, questions/approval requests, and completion. The waiting pulse is brief, not an endless animation.
-6. **Construction crew.** Small workers illustrate recognized builds and tests, followed by a brief **PASS** or **FAIL** result.
+6. **Construction crew.** Watch for little hard hats when OMP writes or edits a file, or runs a recognized build or test. Workers linger after quick edits; only a build or test result earns **PASS** or **FAIL**.
 7. **Milestone stamps.** **FIRST COMMIT**, **TESTS PASSED**, and **RELEASED** respond to supported command results, not words in a title or prompt.
 8. **Do-not-disturb sign.** A larger fold-out **DEEP WORK** or **WAITING ON A BUILD** sign keeps the original note intact and suppresses fun effects until DND is off.
 9. **LAN office board.** Explicitly share project titles, up to three tasks/check states, and attention status with a trusted group. `/sticky office board` opens a live, read-only dashboard.
@@ -131,9 +131,9 @@ Use `/sticky boring mode` to disable local effects, or `/sticky auto` to follow 
 
 ### What activity signals mean
 
-Project effects follow actual title/task changes. Crew and milestone detection is deliberately narrower: it observes supported, literal **direct foreground `bash` tool calls in the main OMP session**, correlating the command with its real tool result. It does not monitor your other shells, arbitrary scripts, CI jobs, nested tool calls, subagents, or background services/jobs. Shell pipelines, wrappers, expansions, and compound commands are not general-purpose parsed; an optional literal `cd PATH &&` prefix is supported.
+Project effects follow actual title/task changes. The crew watches main-session file writes and edits as well as recognized foreground build/test commands. Writing files doesn't imply that tests passed. Shell milestones require a matched tool result. The note does not watch other terminals, arbitrary scripts, CI, subagents, or background jobs.
 
-Recognized examples include `npm test`, `npm run build` and equivalent pnpm/yarn/bun commands; Cargo and Go test/build commands; `node --test`, pytest, Jest, and `vitest run`. Help, dry-run, watch, listing, and other non-execution modes are excluded. A successful recognized test result produces **TESTS PASSED**; it is not a claim about coverage or the correctness of the tests themselves.
+Recognized commands include `npm test`, `npm run build` and equivalent pnpm/yarn/bun commands; Cargo and Go test/build commands; `node --test`, pytest, Jest, and `vitest run`. A literal chain such as `cd app && npm run check && npm test` can earn **TESTS PASSED** when the entire command succeeds. Pipes, arbitrary wrappers and shell expansions are not treated as proof. Help, dry-run, watch, listing, and other non-execution modes are excluded.
 
 **FIRST COMMIT** means the first observed successful `git commit` in the current activity lifecycle, not the repository's first-ever commit. **RELEASED** requires a successful supported npm/pnpm/yarn/Cargo publish or `gh release create` result with matching final publication evidence in its output. Draft, staged, dry-run, failed, cancelled, and still-running results do not count. Unrecognized output may produce no stamp. A title such as “release complete” or an assistant's claim cannot trigger a release stamp or office wave.
 

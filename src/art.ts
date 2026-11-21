@@ -1,5 +1,12 @@
 import type { VisualFrame } from "./effects.ts";
 
+/** A slower renderer may present an earlier pose, never a different note or activity. */
+export function continuesAnimation(before?: VisualFrame, after?: VisualFrame): boolean {
+  return !!before?.motion && before.motion === after?.motion && before.fun === after.fun &&
+    before.attention === after.attention && before.crew === after.crew && before.stamp === after.stamp &&
+    before.dnd === after.dnd && before.checks === after.checks;
+}
+
 /** Only fields that can change visible ink belong in renderer cache keys. */
 export function visualFrameKey(fx?: VisualFrame): string {
   if (!fx) return "";
@@ -8,17 +15,20 @@ export function visualFrameKey(fx?: VisualFrame): string {
   return `${dnd}/${fx.attention}/${fx.crew}/${fx.stamp ?? ""}/${fx.motion ?? ""}/${fx.motion ? fx.step : ""}/${fx.motion === "check" || fx.motion === "victory" ? fx.checks.join(",") : ""}`;
 }
 
-/** Discrete animation frames share one semantic terminal representation. */
+/** Frame changes affect ANSI ink only when there's something new to show. */
 export function effectLabels(fx?: VisualFrame): readonly string[] {
   if (!fx) return [];
   const labels: string[] = [];
   if (fx.dnd) labels.push(`DO NOT DISTURB — ${fx.dnd}`);
   if (fx.motion === "crumple") labels.push("Paper crumpled — a fresh start");
   if (!fx.fun || fx.dnd) return labels;
-  labels.push(({ idle: "Ready", working: "Working", waiting: "Needs your attention", finished: "Finished" })[fx.attention]);
-  if (fx.crew !== "none") labels.push(({ build: "Construction crew: building", test: "Construction crew: testing", pass: "Construction crew: passed", fail: "Construction crew: failed" })[fx.crew]);
+  if (fx.motion === "victory") {
+    const sparks = ["* . +", ". + *", "+ * ."];
+    labels.push(`SHIPPED!  ${sparks[fx.step % 3]}  ${sparks[(fx.step + 1) % 3]}`);
+  }
+  if (fx.crew !== "none") labels.push(({ editing: "Construction crew: editing", build: "Construction crew: building", test: "Construction crew: testing", pass: "Construction crew: passed", fail: "Construction crew: failed" })[fx.crew]);
   if (fx.stamp) labels.push(fx.stamp);
-  if (fx.motion === "victory") labels.push("SHIPPED — nice work!");
+  labels.push(({ idle: "Ready", working: "Working", waiting: "Needs your attention", finished: "Finished" })[fx.attention]);
   if (fx.motion === "wave") labels.push("Office wave received");
   if (fx.motion === "flutter") labels.push("A little paper flutter");
   return labels;
@@ -59,8 +69,10 @@ function crewArt(fx: VisualFrame, width: number, height: number, step: number): 
     ? `<g fill="#bd7945" stroke="#85532b" stroke-width="1"><rect x="${x - 8}" y="${y - 9}" width="24" height="11"/><rect x="${x + 18}" y="${y - 9}" width="24" height="11"/><rect x="${x + 4}" y="${y - 21}" width="24" height="11"/></g><path d="M${x + 13} ${y - 30} l${step % 2 ? 4 : -4} -6" stroke="#b58438" stroke-width="2"/>`
     : fx.crew === "test"
       ? `<path d="M${x + 5} ${y - 30} v12 l-10 17 h29 l-10 -17 v-12" fill="#c6e0cc" stroke="#436651" stroke-width="2"/><path d="M${x} ${y - 7} h19" stroke="#548968" stroke-width="4"/><circle cx="${x + 9}" cy="${y - 14 - step * 2}" r="2" fill="#548968"/>`
-      : lettering(fx.crew === "pass" ? "PASS" : "FAIL", x + 9, y - 9, 15, color, 'text-anchor="middle"');
-  return `<g>${beam}${worker(x - 59, y - 2, step, color, fx.crew === "build" ? "hammer" : "clipboard")}${scene}${worker(x + 71, y - 2, (step + 2) % 6, color, fx.crew === "pass" || fx.crew === "fail" ? "flag" : "clipboard")}</g>`;
+      : fx.crew === "editing"
+        ? `<g transform="translate(${x - 14} ${y - 32})"><rect width="48" height="32" rx="3" fill="#faedbe" stroke="#655139" stroke-width="2"/><path d="m14 8 -7 7 7 7 m19 -14 7 7 -7 7 m-7 -17 -6 20" stroke="#397754" stroke-width="3" fill="none"/></g>`
+        : lettering(fx.crew === "pass" ? "PASS" : "FAIL", x + 9, y - 9, 15, color, 'text-anchor="middle"');
+  return `<g>${beam}${worker(x - 59, y - 2, step, color, fx.crew === "build" || fx.crew === "editing" ? "hammer" : "clipboard")}${scene}${worker(x + 71, y - 2, (step + 2) % 6, color, fx.crew === "pass" || fx.crew === "fail" ? "flag" : "clipboard")}</g>`;
 }
 
 export function paperArt(fx: VisualFrame | undefined, width: number, height: number): {

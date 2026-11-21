@@ -3,7 +3,7 @@ import type { Note } from "./state.ts";
 export interface VisualFrame {
   fun: boolean;
   attention: "idle" | "working" | "waiting" | "finished";
-  crew: "none" | "build" | "test" | "pass" | "fail";
+  crew: "none" | "editing" | "build" | "test" | "pass" | "fail";
   stamp?: "FIRST COMMIT" | "TESTS PASSED" | "RELEASED";
   dnd?: "DEEP WORK" | "WAITING ON A BUILD";
   motion?: "victory" | "flutter" | "crumple" | "wave" | "check" | "pulse";
@@ -22,6 +22,7 @@ const MOTIONS: Record<Motion, { priority: number; steps: number }> = {
   crumple: { priority: 5, steps: 6 },
 };
 const FRAME_MS = 120;
+const VICTORY_MS = 3600;
 const CREW_MS = 2400;
 const STAMP_MS = 4200;
 
@@ -40,6 +41,7 @@ export class Effects {
   #checks: readonly number[] = EMPTY_CHECKS;
   #previous?: Note;
   #animation?: NodeJS.Timeout;
+  #victoryTimer?: NodeJS.Timeout;
   #crewTimer?: NodeJS.Timeout;
   #stampTimer?: NodeJS.Timeout;
   #frame?: VisualFrame;
@@ -86,9 +88,16 @@ export class Effects {
     if (this.#disposed) return;
     const previous = this.#previous;
     const changed = !previous || previous.title !== note.title || previous.tasks.length !== note.tasks.length ||
-      previous.tasks.some((task, i) => task.text !== note.tasks[i]?.text || task.done !== note.tasks[i]?.done);
-    if (!changed && !baseline) return;
-    this.#previous = { title: note.title, tasks: note.tasks.map(task => ({ ...task })) };
+      previous.tasks.some((task, i) => task.id !== note.tasks[i].id || task.text !== note.tasks[i].text || task.done !== note.tasks[i].done);
+    const progress = note.progress;
+    const oldProgress = previous?.progress;
+    const progressChanged = progress?.length !== oldProgress?.length ||
+      progress?.some((task, i) => task.id !== oldProgress?.[i]?.id || task.done !== oldProgress?.[i]?.done);
+    if (!changed && !progressChanged && !baseline) return;
+    this.#previous = {
+      title: note.title, tasks: note.tasks.map(task => ({ ...task })),
+      progress: progressChanged ? progress?.map(task => ({ ...task })) : oldProgress,
+    };
     if (baseline) {
       // Explicit restore/show is also the cancellation boundary for a pending dismissal.
       const hadMotion = this.#motion !== undefined;
@@ -106,9 +115,9 @@ export class Effects {
         if (!task.done) continue;
         // Match occurrences, not indexes: the host may remove completed rows or reorder work.
         const old = previous.tasks.findIndex((candidate, index) =>
-          !used.has(index) && candidate.text === task.text && candidate.done === task.done);
+          !used.has(index) && candidate.id === task.id && candidate.text === task.text && candidate.done === task.done);
         const unfinished = old < 0 ? previous.tasks.findIndex((candidate, index) =>
-          !used.has(index) && candidate.text === task.text && !candidate.done) : -1;
+          !used.has(index) && candidate.id === task.id && candidate.text === task.text && !candidate.done) : -1;
         if (old >= 0) used.add(old);
         else if (unfinished >= 0) {
           used.add(unfinished);
@@ -116,9 +125,18 @@ export class Effects {
         }
       }
     }
-    const finished = sameTitle && previous.tasks.some(task => !task.done) && note.tasks.length > 0 &&
-      note.tasks.every(task => task.done) &&
-      previous.tasks.every((task, index) => task.done || used.has(index));
+    let finished = false;
+    if (sameTitle && oldProgress && progress) {
+      // The final three checked rows need not include any of the previously visible open rows.
+      if (oldProgress.some(t => !t.done) && progress.length && progress.every(t => t.done)) {
+        const completed = new Set(progress.map(t => t.id));
+        finished = oldProgress.every(t => t.done || (t.id !== undefined && completed.has(t.id)));
+      }
+    } else if (sameTitle && !oldProgress && !progress) {
+      finished = previous.tasks.some(task => !task.done) && note.tasks.length > 0 &&
+        note.tasks.every(task => task.done) && previous.tasks.every((task, index) => task.done || used.has(index));
+    }
+    if (!changed && !finished) return;
     if (this.#motion !== "crumple" && (!sameTitle || (this.#motion === "victory" && !finished))) {
       this.#stopMotion();
     }
@@ -140,23 +158,29 @@ export class Effects {
   }
 
   crew(value: VisualFrame["crew"]): void {
-    if (this.#disposed || this.#crew === value) return;
+    if (this.#disposed) return;
+    if (this.#crew === value) {
+      if (value === "editing") { clearTimeout(this.#crewTimer); this.#crewTimer = undefined; }
+      return;
+    }
+    const linger = this.#active && this.#crew === "editing" && value === "none";
+    if (linger && this.#crewTimer) return;
     clearTimeout(this.#crewTimer);
     this.#crewTimer = undefined;
-    this.#crew = value;
+    if (!linger) this.#crew = value;
     if (!this.#active) {
       if (value === "pass" || value === "fail") this.#crew = "none";
       return;
     }
-    if (value === "pass" || value === "fail") {
+    if (linger || value === "pass" || value === "fail") {
       this.#crewTimer = setTimeout(() => {
         this.#crewTimer = undefined;
         this.#crew = "none";
         this.#notify();
       }, CREW_MS);
       this.#crewTimer.unref?.();
-      this.#startMotion(value === "pass" ? "check" : "flutter");
-    } else if (value === "build" || value === "test") {
+      if (!linger) this.#startMotion(value === "pass" ? "check" : "flutter");
+    } else if (value !== "none") {
       this.#startMotion("flutter");
     }
     this.#notify();
@@ -210,16 +234,18 @@ export class Effects {
   }
 
   #quiet(): void {
+    if (this.#crewTimer) this.#crew = "none";
     clearTimeout(this.#crewTimer);
     clearTimeout(this.#stampTimer);
     this.#crewTimer = undefined;
     this.#stampTimer = undefined;
     this.#stamp = undefined;
-    if (this.#crew === "pass" || this.#crew === "fail") this.#crew = "none";
     if (this.#motion !== "crumple") this.#stopMotion();
   }
 
   #stopMotion(): void {
+    clearTimeout(this.#victoryTimer);
+    this.#victoryTimer = undefined;
     clearInterval(this.#animation);
     this.#animation = undefined;
     this.#motion = undefined;
@@ -230,19 +256,34 @@ export class Effects {
   #startMotion(motion: Motion): boolean {
     if (this.#motion && MOTIONS[this.#motion].priority >= MOTIONS[motion].priority) return false;
     clearInterval(this.#animation);
+    clearTimeout(this.#victoryTimer);
+    this.#victoryTimer = undefined;
     this.#motion = motion;
     this.#step = 0;
     if (motion === "crumple") this.#checks = EMPTY_CHECKS;
     this.#animation = setInterval(() => {
-      if (++this.#step >= MOTIONS[motion].steps) {
+      if (this.#step + 1 >= MOTIONS[motion].steps) {
+        if (motion === "victory") {
+          clearInterval(this.#animation);
+          this.#animation = undefined;
+          return; // Hold the last painted frame without scheduling more repaints.
+        }
         this.#stopMotion();
         this.#notify();
         if (motion === "crumple" && !this.#disposed) this.#crumpled();
       } else {
+        this.#step++;
         this.#notify();
       }
     }, FRAME_MS);
     this.#animation.unref?.();
+    if (motion === "victory") {
+      this.#victoryTimer = setTimeout(() => {
+        this.#stopMotion();
+        this.#notify();
+      }, VICTORY_MS);
+      this.#victoryTimer.unref?.();
+    }
     return true;
   }
 }

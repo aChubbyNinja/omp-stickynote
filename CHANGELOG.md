@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.2 — 2026-11-20
+
+- Fixed frame starvation on slower desktop and terminal graphics paths: a finished frame is now shown even if the next pose is already queued. Frames from an old note, activity, or size are still discarded.
+- Fixed missed confetti when OMP completed more tasks than the three displayed on the card. The note observes live todo results, tracks the full checklist, and holds its final confetti frame for a visible 3.6-second celebration.
+- The construction crew now appears for ordinary file edits and writes, including quick operations. Recognized foreground build/test chains also bring out the workers; editing alone never produces a passing-test stamp.
+
 ## 1.4.1 — 2026-11-20
 
 - Local paper effects now start enabled unless the current branch has a saved preference. Use `/sticky boring mode` to turn them off and `/sticky fun on` to turn them back on. Office sharing remains opt-in.

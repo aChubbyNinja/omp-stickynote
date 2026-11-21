@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getCellDimensions, TERMINAL, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
-import { cleanLabel, ENTRY_TYPE, parseSaved, restore, sessionTitle, type SavedNote, type Task } from "./state.ts";
+import { cleanLabel, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, todoSnapshot, type SavedNote, type Task } from "./state.ts";
 import { DesktopNote } from "./desktop.ts";
 import { headlineLayout, PAPER_WIDTH } from "./paper.ts";
 import { Effects, type VisualFrame } from "./effects.ts";
@@ -43,6 +43,9 @@ export default function stickynote(pi: ExtensionAPI): void {
   pi.setLabel("OMP Stickynote");
   let saved: SavedNote = { version: 1, hidden: false, manual: null };
   let tasks: Task[] = [];
+  let taskRows: Task[] = [];
+  let todoSource: string | undefined;
+  let todoGeneration: string | undefined;
   let tui: TUI | undefined;
   let overlay: OverlayHandle | undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -93,7 +96,7 @@ export default function stickynote(pi: ExtensionAPI): void {
   }
 
   function content() {
-    return saved.manual ?? { title: title(), tasks };
+    return saved.manual ?? { title: title(), tasks: taskRows, progress: tasks };
   }
 
   function stopSharing(): void {
@@ -282,16 +285,22 @@ export default function stickynote(pi: ExtensionAPI): void {
     const leaf = ctx.sessionManager.getLeafId();
     const nextTitle = title();
     if (!force && leaf === lastLeaf && nextTitle === lastTitle) return;
+    let baseline = force;
     if (force || leaf !== lastLeaf) {
       const branch = ctx.sessionManager.getBranch();
-      ({ saved, tasks } = restore(branch));
+      const restored = restore(branch);
+      ({ saved, tasks } = restored);
+      taskRows = projectTasks(tasks);
+      baseline ||= !!restored.todo?.reset && restored.todo.source !== todoSource;
+      todoSource = restored.todo?.source;
+      todoGeneration = restored.todo?.generation;
       fx?.fun(restoredFun(branch));
       lastLeaf = leaf;
     }
     lastTitle = nextTitle;
     if (!visible()) unmount();
     else mount();
-    contentChanged(force);
+    contentChanged(baseline);
   }
 
   function save(ctx: ExtensionContext): void {
@@ -325,6 +334,8 @@ export default function stickynote(pi: ExtensionAPI): void {
     tui = undefined;
     lastLeaf = undefined;
     lastTitle = undefined;
+    todoSource = undefined;
+    todoGeneration = undefined;
     crumpled = false;
     crumpling = false;
     dnd = undefined;
@@ -436,6 +447,18 @@ export default function stickynote(pi: ExtensionAPI): void {
   pi.on("session_tree", (_event, ctx) => start(ctx));
   pi.on("session_clear", (_event, ctx) => start(ctx));
   pi.on("session_shutdown", (_event, ctx) => { if (active(ctx)) stop(); });
+  pi.on("message_end", (event, ctx) => {
+    if (!active(ctx)) return;
+    const snapshot = todoSnapshot({ type: "message", message: event.message }, todoGeneration);
+    if (!snapshot) return;
+    // The host can notify before its branch append settles. Consume the event's
+    // committed snapshot, not a stale getBranch(), so quick completions survive.
+    tasks = snapshot.tasks;
+    taskRows = projectTasks(tasks);
+    todoSource = snapshot.source;
+    todoGeneration = snapshot.generation;
+    contentChanged(snapshot.reset);
+  });
   pi.on("input", (event, ctx) => {
     if (active(ctx) && !event.text.trimStart().startsWith("/")) hasStarted = true;
   });

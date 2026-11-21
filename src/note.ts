@@ -1,6 +1,6 @@
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
 import { getCellDimensions, getImageDimensions, Image, TERMINAL, truncateToWidth, visibleWidth, type Component } from "@oh-my-pi/pi-tui";
-import { effectLabels, semanticFrameKey, visualFrameKey } from "./art.ts";
+import { continuesAnimation, effectLabels, semanticFrameKey, visualFrameKey } from "./art.ts";
 import type { VisualFrame } from "./effects.ts";
 import { PAPER_WIDTH, paperSvg, WELCOME, wrapLabel } from "./paper.ts";
 import { cleanLabel, type Note } from "./state.ts";
@@ -20,6 +20,7 @@ interface StickyNoteOptions {
 
 interface RasterRequest {
   key: string;
+  scene: string;
   note: Note;
   fx?: VisualFrame;
   width: number;
@@ -37,6 +38,7 @@ export class StickyNote implements Component {
   #semanticKey = "";
   #options: StickyNoteOptions;
   #revision = 0;
+  #scene = 0;
   #width = -1;
   #maxRows = -1;
   #rows: readonly string[] = [];
@@ -44,6 +46,7 @@ export class StickyNote implements Component {
   #running = false;
   #image?: Image;
   #imageKey?: string;
+  #imageScene?: string;
   #failedKey?: string;
   #disposed = false;
   #graphicsRows?: readonly string[];
@@ -68,6 +71,10 @@ export class StickyNote implements Component {
     const sameNote = next.title === this.#note.title && next.tasks.length === this.#note.tasks.length &&
       next.tasks.every((task, i) => task.text === this.#note.tasks[i].text && task.done === this.#note.tasks[i].done);
     const changed = !sameNote || (TERMINAL.imageProtocol ? fxKey !== this.#fxKey : semanticKey !== this.#semanticKey);
+    if (changed && (!sameNote || !continuesAnimation(this.#fx, fx))) {
+      this.#scene++;
+      this.#desired = undefined;
+    }
     this.#fx = fx;
     this.#fxKey = fxKey;
     this.#semanticKey = semanticKey;
@@ -75,11 +82,8 @@ export class StickyNote implements Component {
     // Keep our own snapshot: asynchronous raster work must not observe caller mutations.
     this.#note = next;
     this.#revision++;
-    this.#desired = undefined;
-    this.#image?.release();
-    this.#image = undefined;
-    this.#imageKey = undefined;
-    this.invalidate();
+    this.#width = -1;
+    this.#graphicsRows = undefined;
   }
 
   invalidate(): void {
@@ -125,13 +129,14 @@ export class StickyNote implements Component {
   }
 
   #fail(error: unknown, key: string): void {
-    if (this.#disposed || this.#desired?.key !== key || this.#failedKey === key) return;
+    if (this.#disposed || (this.#desired?.key !== key && this.#imageKey !== key) || this.#failedKey === key) return;
     this.#failedKey = key;
     this.#image?.release();
     this.#image = undefined;
     this.#imageKey = undefined;
     this.#graphicsRows = undefined;
     this.#report(error);
+    if (this.#desired && this.#desired.key !== key) this.#requestRender();
   }
 
   async #rasterize(): Promise<void> {
@@ -144,7 +149,7 @@ export class StickyNote implements Component {
       // Permit HiDPI upscaling and pad to whole terminal cells, as the host's SvgFigure does.
       const scale = Math.max(1, request.widthPx / paper.width, request.heightPx / paper.height);
       const png = await rasterizeSvg(new TextEncoder().encode(paper.svg), request.widthPx, request.heightPx, scale, request.cell);
-      if (this.#disposed || this.#desired !== request) return;
+      if (this.#disposed || this.#desired?.scene !== request.scene) return;
       const base64 = Buffer.from(png).toString("base64");
       const dimensions = getImageDimensions(base64, "image/png");
       if (!dimensions) throw new Error("Sticky note rasterizer returned an invalid PNG");
@@ -158,18 +163,21 @@ export class StickyNote implements Component {
         maxWidthCells: Math.max(1, request.width - 2),
         maxHeightCells: request.maxRows,
         requestRender: () => {
-          if (!this.#disposed && this.#image === image && this.#desired === request) this.#requestRender();
+          if (!this.#disposed && this.#image === image && this.#desired?.scene === request.scene) this.#requestRender();
         },
       }, dimensions);
+      this.#image?.release();
       this.#image = image;
       this.#imageKey = request.key;
+      this.#imageScene = request.scene;
       this.#requestRender();
     } catch (error) {
       this.#fail(error, request.key);
     } finally {
       this.#running = false;
-      // Exactly one native operation at a time; superseded requests never repaint.
-      if (!this.#disposed && this.#desired && this.#desired !== request) void this.#rasterize();
+      // Once a compatible image exists, render() gives its encoder a chance to
+      // present it before requesting the latest pose.
+      if (!this.#disposed && !this.#image && this.#desired && this.#desired !== request) void this.#rasterize();
     }
   }
 
@@ -181,13 +189,17 @@ export class StickyNote implements Component {
     const maxRows = Number.isFinite(availableRows) ? Math.max(1, Math.floor(availableRows)) : 40;
     if (TERMINAL.imageProtocol) {
       const cell = getCellDimensions();
-      const key = `${this.#revision}/${width}/${maxRows}/${cell.widthPx}/${cell.heightPx}/${TERMINAL.imageProtocol}`;
+      const geometry = `${width}/${maxRows}/${cell.widthPx}/${cell.heightPx}/${TERMINAL.imageProtocol}`;
+      const key = `${this.#revision}/${geometry}`;
       if (this.#desired?.key !== key) {
-        this.#image?.release();
-        this.#image = undefined;
-        this.#imageKey = undefined;
+        const scene = `${this.#scene}/${geometry}`;
+        if (this.#imageScene !== scene) {
+          this.#image?.release();
+          this.#image = undefined;
+          this.#imageKey = undefined;
+        }
         this.#desired = {
-          key, note: this.#note, fx: this.#fx, width, maxRows,
+          key, scene, note: this.#note, fx: this.#fx, width, maxRows,
           widthPx: Math.max(1, Math.floor(Math.max(1, width - 2) * cell.widthPx)),
           heightPx: Math.max(1, Math.floor(maxRows * cell.heightPx)),
           cell: { widthPx: cell.widthPx, heightPx: cell.heightPx },
@@ -201,6 +213,7 @@ export class StickyNote implements Component {
           // the host emits these cached Image rows after painting that rectangle.
           if (lines.length <= maxRows && lines.some(line => TERMINAL.isImageLine(line))) {
             this.#graphicsRows = lines;
+            if (this.#imageKey !== key && !this.#running && this.#failedKey !== key) void this.#rasterize();
             this.#graphicsProtocol = TERMINAL.imageProtocol;
             if (this.#placeholderWidth !== width || this.#placeholderRows.length !== lines.length) {
               this.#placeholderWidth = width;

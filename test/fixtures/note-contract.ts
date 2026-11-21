@@ -127,12 +127,25 @@ export default async function noteContract(pi: ExtensionAPI): Promise<void> {
     },
   });
   const timeout = setTimeout(() => ready.reject(new Error("Native image rendering timed out")), 10_000);
+  // Advance a single animation faster than rasterization/encoding. It must
+  // deliver actual graphics while still moving, not only when updates stop.
+  const workload = { title: "Building", tasks: [{ text: "Compile assets", done: false }] };
+  const frame = { fun: true, attention: "working", crew: "build", checks: [], motion: "flutter", step: 0 } as const;
+  let pose = 0;
+  graphic.update(workload, frame);
+  const motion = setInterval(() => {
+    graphic.update(workload, { ...frame, step: ++pose % 6 });
+    graphic.render(54);
+  }, 4);
   try {
+    graphic.render(54);
+    graphic.update(workload, { ...frame, step: ++pose });
     graphic.render(54);
     await ready.promise;
     graphic.update({ title: "A different project", tasks: [] });
     assert.equal(graphic.graphicsRows, undefined, "A new project must never display the previous raster");
   } finally {
+    clearInterval(motion);
     clearTimeout(timeout);
     graphic.dispose();
     setTerminalImageProtocol(previousProtocol);

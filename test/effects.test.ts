@@ -122,6 +122,49 @@ test("completion recognizes the host's projected or reordered task rows", t => {
   assert.deepEqual(effects.frame.checks, [0, 1]);
 });
 
+test("finishing a whole automatic checklist celebrates even if all three visible rows change", t => {
+  const { effects, events } = harness(t);
+  effects.fun(true);
+  const progress = Array.from({ length: 7 }, (_, i) => ({ text: `Task ${i}`, id: `phase/${i}`, done: false }));
+  const complete = progress.map(task => ({ ...task, done: true }));
+  const before = { title: "Project", tasks: progress.slice(0, 3), progress };
+  const after = { title: "Project", tasks: complete.slice(-3), progress: complete };
+  effects.note(before, true);
+  effects.note(after);
+  assert.equal(effects.frame.motion, "victory");
+  t.mock.timers.tick(1000);
+  const changes = events.changed;
+  t.mock.timers.tick(2000);
+  assert.equal(effects.frame.motion, "victory", "confetti should still be visible on a second glance");
+  assert.equal(events.changed, changes, "holding the stamp must not keep repainting the screen");
+  t.mock.timers.tick(1000);
+  assert.equal(effects.frame.motion, undefined);
+  effects.note(before, true);
+  effects.note({ ...after, progress: complete.slice(1) });
+  assert.notEqual(effects.frame.motion, "victory", "dropping an unfinished item is not completion");
+});
+
+test("fast edits leave visible workers, not a test result; quiet mode cancels them", t => {
+  const { effects } = harness(t);
+  effects.fun(true);
+  effects.crew("editing");
+  effects.crew("none");
+  t.mock.timers.tick(1000);
+  assert.equal(effects.frame.crew, "editing");
+  assert.equal(effects.frame.stamp, undefined);
+  effects.crew("editing");
+  t.mock.timers.tick(3000);
+  assert.equal(effects.frame.crew, "editing", "a new live edit outlasts the previous edit's timer");
+  effects.crew("none");
+  effects.fun(false);
+  effects.fun(true);
+  assert.equal(effects.frame.crew, "none", "no replay of a finished edit");
+  effects.crew("editing");
+  effects.crew("none");
+  t.mock.timers.tick(3000);
+  assert.equal(effects.frame.crew, "none");
+});
+
 test("duplicate task labels consume distinct prior rows", t => {
   const { effects } = harness(t);
   effects.fun(true);

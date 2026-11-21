@@ -4,7 +4,7 @@ import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
 import { getImageDimensions } from "@oh-my-pi/pi-tui";
-import { visualFrameKey } from "./art.ts";
+import { continuesAnimation, visualFrameKey } from "./art.ts";
 import type { VisualFrame } from "./effects.ts";
 import { PAPER_WIDTH, paperSvg } from "./paper.ts";
 import { cleanLabel, type Note } from "./state.ts";
@@ -25,6 +25,7 @@ interface DesktopFrame {
 
 interface RasterRequest {
   key: string;
+  scene: string;
   svg: string;
   width: number;
   height: number;
@@ -84,13 +85,14 @@ export class DesktopNote {
   #fx?: VisualFrame;
   #fxKey = "";
   #revision = 0;
+  #scene = 0;
   #frame?: DesktopFrame;
   #sentFrame?: DesktopFrame;
   #sentRasterKey?: string;
   #blocked = false;
   #paper?: { rowHeight: number; maxWidth: number; svg: string; width: number; height: number };
   #desired?: RasterRequest;
-  #raster?: { key: string; png: string };
+  #raster?: { key: string; scene: string; png: string };
   #running = false;
   #scheduled = false;
 
@@ -138,14 +140,17 @@ export class DesktopNote {
     const fxKey = fx === this.#fx ? this.#fxKey : visualFrameKey(fx);
     const sameNote = next.title === this.#note.title && next.tasks.length === this.#note.tasks.length &&
       next.tasks.every((task, index) => task.text === this.#note.tasks[index].text && task.done === this.#note.tasks[index].done);
-    this.#fx = fx;
     if (sameNote && fxKey === this.#fxKey) return;
+    if (!sameNote || !continuesAnimation(this.#fx, fx)) {
+      this.#scene++;
+      this.#raster = undefined;
+    }
+    this.#fx = fx;
     this.#fxKey = fxKey;
     this.#note = next;
     this.#revision++;
     this.#paper = undefined;
     this.#desired = undefined;
-    this.#raster = undefined;
     this.#refresh();
   }
 
@@ -193,8 +198,9 @@ export class DesktopNote {
       const scale = Math.min(width / paper.width, height / paper.height);
       // Unconstrained row/column changes do not invalidate the PNG. A short window
       // lowers one uniform scale, without distorting the paper or adding a cell mat.
-      const key = `${this.#revision}/${rowHeight}/${paper.width}/${scale}`;
-      if (this.#desired?.key !== key) this.#desired = { key, svg: paper.svg, width, height, scale };
+      const geometry = `${rowHeight}/${paper.width}/${scale}`;
+      const key = `${this.#revision}/${geometry}`;
+      if (this.#desired?.key !== key) this.#desired = { key, scene: `${this.#scene}/${geometry}`, svg: paper.svg, width, height, scale };
     }
     this.#flush();
     this.#scheduleRaster();
@@ -217,10 +223,10 @@ export class DesktopNote {
     try {
       // No terminal-cell padding or SIXEL conversion: the companion needs true alpha.
       const png = await rasterizeSvg(new TextEncoder().encode(request.svg), request.width, request.height, request.scale);
-      if (this.#disposed || this.#failed || this.#desired?.key !== request.key) return;
+      if (this.#disposed || this.#failed || this.#desired?.scene !== request.scene) return;
       const base64 = Buffer.from(png.buffer, png.byteOffset, png.byteLength).toString("base64");
       if (!getImageDimensions(base64, "image/png")) throw new Error("The desktop sticky note rasterizer returned an invalid PNG");
-      this.#raster = { key: request.key, png: base64 };
+      this.#raster = { key: request.key, scene: request.scene, png: base64 };
       this.#flush();
     } catch (error) {
       if (this.#frame?.visible && this.#desired?.key === request.key) this.#fail(error);
@@ -234,7 +240,7 @@ export class DesktopNote {
     const child = this.#child;
     const frame = this.#frame;
     if (!this.ready || !child || !frame || this.#blocked) return;
-    const raster = this.#raster?.key === this.#desired?.key ? this.#raster : undefined;
+    const raster = this.#raster?.scene === this.#desired?.scene ? this.#raster : undefined;
     const png = frame.visible && raster && raster.key !== this.#sentRasterKey ? raster.png : undefined;
     if (!png && sameFrame(this.#sentFrame, frame)) return;
     try {

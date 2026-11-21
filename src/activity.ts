@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 type Attention = "idle" | "working" | "waiting" | "finished";
-type Crew = "none" | "test" | "build" | "pass" | "fail";
+type WorkingCrew = "test" | "build" | "editing";
+type Crew = "none" | WorkingCrew | "pass" | "fail";
 type Milestone = "FIRST COMMIT" | "TESTS PASSED" | "RELEASED";
 type Signal = "test" | "build" | "commit" | "npm" | "pnpm" | "yarn" | "cargo" | "gh";
-interface Call { tool: string; signal?: Signal; order: number }
+interface Activity { signals: Signal[]; crew?: WorkingCrew; device?: string; observedOnly?: boolean }
+interface Call extends Activity { tool: string; order: number }
 interface Callbacks {
   active(ctx: ExtensionContext): boolean;
   attention(value: Attention): void;
@@ -16,11 +18,12 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-// This is deliberately not a shell parser: only literal words and an optional
-// `cd <literal> &&` prefix are accepted. Never execute a shell to classify it.
-function words(command: string): string[] | undefined {
+// Recognize literal && chains only: their zero exit proves every segment ran
+// successfully. Separators inside quotes remain data, never shell syntax.
+function words(command: string): string[][] | undefined {
   if (/[\r\n\x00-\x08\x0b-\x1f\x7f]/.test(command)) return;
-  const result: string[] = [];
+  const result: string[][] = [];
+  let segment: string[] = [];
   let word = "";
   let present = false;
   let quote = "";
@@ -36,12 +39,14 @@ function words(command: string): string[] | undefined {
     }
     if (c === "'" || c === '"') { quote = c; present = true; continue; }
     if (c === " " || c === "\t") {
-      if (present) { result.push(word); word = ""; present = false; }
+      if (present) { segment.push(word); word = ""; present = false; }
       continue;
     }
     if (c === "&" && command[i + 1] === "&") {
-      if (present) { result.push(word); word = ""; present = false; }
-      result.push("&&");
+      if (present) { segment.push(word); word = ""; present = false; }
+      if (!segment.length) return;
+      result.push(segment);
+      segment = [];
       i++;
       continue;
     }
@@ -50,17 +55,13 @@ function words(command: string): string[] | undefined {
     present = true;
   }
   if (quote) return;
-  if (present) result.push(word);
-  if (result[0] === "cd" && result[2] === "&&" && result[1] && !result[1].startsWith("-")) result.splice(0, 3);
-  if (result.includes("&&")) return;
+  if (present) segment.push(word);
+  if (!segment.length) return;
+  result.push(segment);
   return result;
 }
 
-function signalFor(args: unknown): Signal | undefined {
-  const input = record(args);
-  if (!input || typeof input.command !== "string" || input.async === true || input.name != null || input.ready != null) return;
-  const w = words(input.command);
-  if (!w?.length) return;
+function signalFor(w: string[]): Signal | undefined {
   // These modes may exit successfully without executing tests/builds or publishing.
   if (w.some(arg => /^(?:--(?:help|version|dry-run|dryRun|list|listTests|list-tests|showConfig|show-config|clearCache|collect-only|collectonly|co|fixtures|fixtures-per-test|markers|setup-plan|build-plan|watch|watchAll|ui|interactive|draft|if-present|ignore-scripts|script-shell|plan|no-run|no-verify|passWithNoTests)(?:=|$)|-[hVn]$)/.test(arg))) return;
   const [exe, sub, third] = w;
@@ -92,6 +93,80 @@ function signalFor(args: unknown): Signal | undefined {
     if (w.some(arg => /^(?:-list(?:=|$)|-c$)/.test(arg))) return;
     return sub === "test" ? "test" : "build";
   }
+}
+
+function shellActivity(args: unknown): Activity {
+  const input = record(args);
+  if (!input || typeof input.command !== "string" || input.async === true || input.name != null || input.ready != null) return { signals: [] };
+  const segments = words(input.command);
+  if (!segments) return { signals: [] };
+  const signals: Signal[] = [];
+  for (const w of segments) {
+    if (segments.length > 1 && w[0] === "cd" && w.length === 2 && w[1] && !w[1].startsWith("-")) continue;
+    const signal = signalFor(w);
+    if (signal) signals.push(signal);
+    // Common validation steps can precede/follow tests, but don't themselves
+    // establish a test/build milestone. Never accept arbitrary shell builtins
+    // (e.g. `exit 0 && npm test`) or unrecognized scripts as proof.
+    else if (!(segments.length > 1 && ["npm", "pnpm", "yarn", "bun"].includes(w[0]) &&
+      w[1] === "run" && w.length === 3 && ["check", "lint", "typecheck"].includes(w[2]))) return { signals: [] };
+  }
+  // Publication/commit output cannot be attributed to one segment in a chain.
+  // Preserve the established single-command `cd dir && git commit` form.
+  if (signals.some(signal => signal !== "test" && signal !== "build") &&
+    segments.filter(w => w[0] !== "cd").length !== 1) return { signals: [] };
+  const last = signals.at(-1);
+  const crew = last === "test" || last === "build" ? last : undefined;
+  return { signals, crew };
+}
+
+function filesystemPath(path: unknown): path is string {
+  return typeof path === "string" && !!path &&
+    (!/^[a-z][a-z\d+.-]*:\/\//i.test(path) || /^(?:local|file|ssh):\/\//.test(path));
+}
+
+function editsFiles(args: unknown): boolean {
+  const input = record(args);
+  if (input?.path !== undefined) return filesystemPath(input.path);
+  const patch = typeof args === "string" ? args : input?.input;
+  if (typeof patch !== "string") return false;
+  const paths = Array.from(patch.matchAll(/^(?:\[([^\r\n#]+)#[0-9a-fA-F]{4}\]|\*\*\* (?:Update|Add|Delete) File: ([^\r\n]+))$/gm),
+    match => match[1] ?? match[2]);
+  return paths.length > 0 && paths.every(filesystemPath);
+}
+
+function activityFor(tool: string, args: unknown): Activity {
+  if (tool === "bash" || tool === "functions.bash") return shellActivity(args);
+  if (tool === "edit" || tool === "functions.edit") return { signals: [], crew: editsFiles(args) ? "editing" : undefined };
+  const input = record(args);
+  if (tool === "write" || tool === "functions.write") {
+    if (typeof input?.path !== "string") return { signals: [] };
+    const device = /^xd:\/\/(bash|edit)$/.exec(input.path)?.[1];
+    if (device && typeof input.content === "string") {
+      try {
+        const inner = JSON.parse(input.content);
+        if (!record(inner)) return { signals: [] };
+        return { ...activityFor(device, inner), device };
+      } catch { return { signals: [] }; }
+    }
+    // Control-plane writes are messages, replies or tool dispatch, not coding.
+    if (filesystemPath(input.path)) {
+      return { signals: [], crew: "editing" };
+    }
+  }
+  if (tool === "multi_tool_use.parallel" && Array.isArray(input?.tool_uses)) {
+    // This provider wrapper has no standardized per-child result contract.
+    // Observe attempted work, but never turn its aggregate success into stamps.
+    let crew: WorkingCrew | undefined;
+    for (const entry of input.tool_uses) {
+      const child = record(entry);
+      if (typeof child?.recipient_name === "string" && child.recipient_name !== tool) {
+        crew = activityFor(child.recipient_name, child.parameters).crew ?? crew;
+      }
+    }
+    return { signals: [], crew, observedOnly: true };
+  }
+  return { signals: [] };
 }
 
 // A zero exit can mean dry-run, draft or staged publication. Require the
@@ -163,12 +238,12 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     for (const call of calls.values()) if (call.tool === "ask") return true;
     return false;
   }
-  function currentCrew(): "test" | "build" | undefined {
+  function currentCrew(): WorkingCrew | undefined {
     let latest: Call | undefined;
     for (const call of calls.values()) {
-      if ((call.signal === "test" || call.signal === "build") && (!latest || call.order > latest.order)) latest = call;
+      if (call.crew && (!latest || call.order > latest.order)) latest = call;
     }
-    return latest?.signal as "test" | "build" | undefined;
+    return latest?.crew;
   }
   function busy(ctx: ExtensionContext, token: number): void {
     attention(ctx, token, waiting() ? "waiting" : "working");
@@ -184,29 +259,32 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     const token = generation;
     calls.delete(id);
     approvals.delete(id);
-    const details = record(record(result)?.details);
+    const outerDetails = record(record(result)?.details);
+    const dispatch = record(outerDetails?.xdev);
+    const matchedDevice = !call.device || (dispatch?.tool === call.device && dispatch.mode === "execute");
+    const details = call.device ? (matchedDevice ? record(dispatch?.inner) : undefined) : outerDetails;
     const deferred = record(details?.async);
     const unfinished = !!deferred && deferred.state !== "completed";
-    const error = isError || details?.timedOut === true || details?.cancelled === true ||
+    const error = isError || record(result)?.isError === true || details?.timedOut === true || details?.cancelled === true ||
       (typeof details?.exitCode === "number" && details.exitCode !== 0) ||
       deferred?.state === "failed" || deferred?.state === "cancelled";
     if (error) failed = true;
     // The installed bash tool omits exitCode on a successful synchronous exit.
     // A running job/service is not a successful exit, even with isError=false.
-    const success = !error && !unfinished && !details?.service && !!details;
-    if (call.signal === "test" || call.signal === "build") {
-      if (error) crewFailed = true;
+    const success = !call.observedOnly && matchedDevice && !error && !unfinished && !details?.service && !!details;
+    if (call.crew) {
+      if (error && call.crew !== "editing") crewFailed = true;
       const live = currentCrew();
-      crew(ctx, token, live ?? (unfinished ? "none" : crewFailed ? "fail" : success ? "pass" : "none"));
+      crew(ctx, token, live ?? (unfinished ? "none" : crewFailed ? "fail" : call.crew === "editing" || call.observedOnly ? "none" : success ? "pass" : "none"));
       if (!live) crewFailed = false;
     }
     if (token !== generation || !guard(ctx)) return;
-    if (success && call.signal) {
-      if (call.signal === "commit" && !committed) {
+    if (success) for (const signal of new Set(call.signals)) {
+      if (signal === "commit" && !committed) {
         committed = true;
         emit(ctx, token, () => callbacks.milestone("FIRST COMMIT"));
-      } else if (call.signal === "test") emit(ctx, token, () => callbacks.milestone("TESTS PASSED"));
-      else if (released(call.signal, result)) emit(ctx, token, () => callbacks.milestone("RELEASED"));
+      } else if (signal === "test") emit(ctx, token, () => callbacks.milestone("TESTS PASSED"));
+      else if (released(signal, result)) emit(ctx, token, () => callbacks.milestone("RELEASED"));
     }
     if (running) busy(ctx, token);
     else attention(ctx, token, waiting() ? "waiting" : "idle");
@@ -231,9 +309,9 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
   pi.on("tool_execution_start", (event, ctx) => {
     if (!guard(ctx)) return;
     const token = generation;
-    const signal = event.toolName === "bash" ? signalFor(event.args) : undefined;
-    calls.set(event.toolCallId, { tool: event.toolName, signal, order: ++order });
-    if (signal === "test" || signal === "build") crew(ctx, token, signal);
+    const activity = activityFor(event.toolName, event.args);
+    calls.set(event.toolCallId, { tool: event.toolName, ...activity, order: ++order });
+    if (activity.crew) crew(ctx, token, activity.crew);
     busy(ctx, token);
   });
   pi.on("tool_execution_end", (event, ctx) => finish(ctx, event.toolCallId, event.toolName, event.result, event.isError));

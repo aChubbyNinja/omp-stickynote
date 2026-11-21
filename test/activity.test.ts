@@ -411,3 +411,176 @@ test("publication evidence is scoped to a live recognized shell invocation", () 
   h.end("shell", {}, false, "bash", npmPublished);
   assert.deepEqual(h.milestones, ["RELEASED"]);
 });
+
+for (const [command, signal, milestone] of [
+  ["npm run check && npm test && npm run build", "build", "TESTS PASSED"],
+  ["cd '/tmp/a project' && npm run lint && npm test", "test", "TESTS PASSED"],
+  ["pnpm run typecheck && pnpm build && pnpm test", "test", "TESTS PASSED"],
+  ["cargo build --locked && cargo test --locked", "test", "TESTS PASSED"],
+  ["npm test && npm test", "test", "TESTS PASSED"],
+  ["cd /tmp && npm run build", "build", undefined],
+  ["git commit -m 'quoted && is not a separator'", undefined, "FIRST COMMIT"],
+] as const) {
+  test(`literal successful command chain: ${command}`, () => {
+    const h = harness();
+    h.start(command);
+    assert.deepEqual(h.crew, signal ? [signal] : []);
+    // Actual OMP 19 successful synchronous BashToolDetails: no exitCode.
+    h.end("shell", { wallTimeNoticeEmitted: false, timeoutSeconds: 300, wallTimeMs: 42 });
+    assert.deepEqual(h.crew, signal ? [signal, "pass"] : []);
+    assert.deepEqual(h.milestones, milestone ? [milestone] : []);
+  });
+}
+
+test("a failed or deferred command chain cannot prove any test passed", () => {
+  for (const details of [{ exitCode: 1 }, { timedOut: true }, { async: { state: "running", jobId: "bg_1" } }]) {
+    const h = harness();
+    h.start("npm test && npm run build");
+    h.end("shell", details);
+    assert.ok(!h.crew.includes("pass"));
+    assert.deepEqual(h.milestones, []);
+  }
+});
+
+test("literal chains reject early exits, masked failures and non-executing modes", () => {
+  for (const command of [
+    "exit 0 && npm test", "exec true && npm test", "source setup && npm test",
+    "npm test || true", "npm test; npm run build", "npm test && npm run build || true",
+    "npm test && npm run release", "npm test && npm publish", "npm test && git commit -m done",
+    "npm test --help && npm run build", "npm test && npm run build --dry-run",
+    "npm run check --if-present && npm test", "npm test &&", "&& npm test",
+    "npm 'test&&npm' test", "echo 'npm test && npm run build'",
+  ]) {
+    const h = harness();
+    h.start(command); h.end();
+    assert.deepEqual(h.crew, [], command);
+    assert.deepEqual(h.milestones, [], command);
+  }
+});
+
+test("filesystem edits are visible work, never successful tests", () => {
+  for (const [toolName, args] of [
+    ["edit", { input: "*** Begin Patch\n[src/example.ts#ABCD]\nPUT 1.=1:\n+export const n = 1;\n*** End Patch" }],
+    ["edit", { path: "src/example.ts", old_string: "1", new_string: "2" }],
+    ["edit", { input: "*** Begin Patch\n*** Update File: src/example.ts\n@@\n-old\n+new\n*** End Patch" }],
+    ["write", { path: "src/example.ts", content: "export const n = 1;" }],
+    ["write", { path: "/tmp/example.ts", content: "" }],
+    ["write", { path: "local://example.ts", content: "" }],
+    ["functions.write", { path: "ssh://host/tmp/example.ts", content: "" }],
+  ] as const) {
+    const h = harness();
+    h.event("tool_execution_start", { toolCallId: "edit", toolName, args });
+    assert.deepEqual(h.crew, ["editing"]);
+    h.event("tool_result", { toolCallId: "edit", toolName, input: args, content: [], details: undefined, isError: false });
+    h.end("edit", {}, false, toolName);
+    assert.deepEqual(h.crew, ["editing", "none"]);
+    assert.deepEqual(h.milestones, []);
+  }
+});
+
+test("control-plane write paths and eval code are not filesystem editing or proof", () => {
+  for (const path of ["agent://Main", "proc://bg_1/kill", "out://", "xd://status", "xd://edit", "xd://bash", "xd://eval"]) {
+    const h = harness();
+    h.event("tool_execution_start", { toolCallId: "write", toolName: "write", args: { path, content: "help" } });
+    h.end("write", {}, false, "write");
+    assert.deepEqual(h.crew, [], path);
+    assert.deepEqual(h.milestones, [], path);
+  }
+  const h = harness();
+  h.event("tool_execution_start", { toolCallId: "eval", toolName: "eval", args: { language: "js", code: "if (false) await tool.bash({command: 'npm test'});" } });
+  h.end("eval", { status: [{ op: "bash" }] }, false, "eval", "TESTS PASSED");
+  assert.deepEqual(h.crew, []);
+  assert.deepEqual(h.milestones, []);
+});
+
+test("mounted bash execution unwraps only the matched device's inner result", () => {
+  for (const [xdev, isError, expected] of [
+    [{ tool: "bash", mode: "execute", inner: { wallTimeNoticeEmitted: false, timeoutSeconds: 300 } }, false, true],
+    [{ tool: "bash", mode: "execute", inner: { exitCode: 1 } }, false, false],
+    [{ tool: "bash", mode: "execute", inner: { async: { state: "running", jobId: "bg_1" } } }, false, false],
+    [{ tool: "bash", mode: "execute", inner: { service: { ready: true } } }, false, false],
+    [{ tool: "bash", mode: "help", inner: {} }, false, false],
+    [{ tool: "eval", mode: "execute", inner: {} }, false, false],
+    [{ tool: "bash", mode: "execute" }, false, false],
+    [{ tool: "bash", mode: "execute", inner: {} }, true, false],
+  ] as const) {
+    const h = harness();
+    h.event("tool_execution_start", { toolCallId: "device", toolName: "write", args: { path: "xd://bash", content: JSON.stringify({ command: "npm run check && npm test" }) } });
+    assert.deepEqual(h.crew, ["test"]);
+    h.end("device", { xdev }, isError, "write");
+    assert.deepEqual(h.milestones, expected ? ["TESTS PASSED"] : []);
+    assert.equal(h.crew.includes("pass"), expected);
+  }
+});
+
+test("mounted edits show editing, but help and malformed requests do not", () => {
+  const h = harness();
+  h.event("tool_execution_start", { toolCallId: "device", toolName: "write", args: { path: "xd://edit", content: JSON.stringify({ input: "[src/example.ts#ABCD]\nPUT 1.=1:\n+new\n" }) } });
+  assert.deepEqual(h.crew, ["editing"]);
+  h.end("device", { xdev: { tool: "edit", mode: "execute", inner: { diff: "" } } }, false, "write");
+  assert.deepEqual(h.crew, ["editing", "none"]);
+  assert.deepEqual(h.milestones, []);
+});
+
+test("parallel wrappers expose crew attempts without trusting aggregate success", () => {
+  for (const [recipient_name, parameters, expected] of [
+    ["functions.write", { path: "src/example.ts", content: "" }, "editing"],
+    ["functions.edit", { input: "[src/example.ts#ABCD]\nPUT 1.=1:\n+new\n" }, "editing"],
+    ["functions.bash", { command: "npm test" }, "test"],
+    ["functions.bash", { command: "npm run build" }, "build"],
+    ["functions.write", { path: "agent://Main", content: "hello" }, undefined],
+    ["functions.read", { path: "src/example.ts" }, undefined],
+    ["functions.bash", { command: "npm test", async: true }, undefined],
+  ] as const) {
+    const h = harness();
+    h.event("tool_execution_start", { toolCallId: "parallel", toolName: "multi_tool_use.parallel", args: { tool_uses: [{ recipient_name, parameters }] } });
+    assert.deepEqual(h.crew, expected ? [expected] : []);
+    h.end("parallel", {}, false, "multi_tool_use.parallel", "TESTS PASSED");
+    assert.deepEqual(h.crew, expected ? [expected, "none"] : []);
+    assert.deepEqual(h.milestones, []);
+  }
+});
+
+test("unrelated quick edits do not hide an active build or manufacture pass", () => {
+  const h = harness();
+  h.start("npm run build", "build");
+  h.event("tool_execution_start", { toolCallId: "edit", toolName: "edit", args: { input: "[src/example.ts#ABCD]\nPUT 1.=1:\n+new\n" } });
+  h.end("edit", {}, false, "edit");
+  assert.deepEqual(h.crew, ["build", "editing", "build"]);
+  h.end("build");
+  assert.deepEqual(h.crew, ["build", "editing", "build", "pass"]);
+  assert.deepEqual(h.milestones, []);
+});
+
+test("only recognizable filesystem edit targets show editing", () => {
+  for (const args of [
+    { input: "" }, { input: "help" }, { input: "*** Begin Patch\n*** End Patch" },
+    { path: "agent://Main", old_string: "hello", new_string: "goodbye" },
+    { input: "[proc://bg_1/kill#ABCD]\nPUT 1.=1:\n+stop\n" },
+    { input: "*** Begin Patch\n*** Update File: agent://Main\n@@\n-old\n+new\n*** End Patch" },
+  ]) {
+    const h = harness();
+    h.event("tool_execution_start", { toolCallId: "edit", toolName: "edit", args });
+    h.end("edit", {}, false, "edit");
+    assert.deepEqual(h.crew, []);
+    assert.deepEqual(h.milestones, []);
+  }
+});
+
+test("an error result cannot be promoted by a non-error execution envelope", () => {
+  const h = harness();
+  h.start("npm test");
+  h.event("tool_execution_end", { toolCallId: "shell", toolName: "bash", isError: false, result: { isError: true, details: {}, content: [] } });
+  assert.deepEqual(h.crew, ["test", "fail"]);
+  assert.deepEqual(h.milestones, []);
+});
+
+test("an overlapping edit cannot discard an actual build failure", () => {
+  const h = harness();
+  h.start("npm run build", "build");
+  h.event("tool_execution_start", { toolCallId: "edit", toolName: "edit", args: { path: "src/example.ts", old_string: "1", new_string: "2" } });
+  h.end("build", { exitCode: 1 });
+  h.end("edit", undefined, false, "edit");
+  assert.deepEqual(h.crew, ["build", "editing", "fail"]);
+  assert.deepEqual(h.milestones, []);
+});
