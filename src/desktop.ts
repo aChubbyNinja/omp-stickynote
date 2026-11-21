@@ -24,6 +24,8 @@ interface DesktopFrame {
   centered: boolean;
   visible: boolean;
   minimized: boolean;
+  /** When a form owns the composer, never extend into its controls. */
+  paperRows?: number;
 }
 
 interface RasterRequest {
@@ -66,7 +68,8 @@ function rendererPath(): string | undefined {
 function sameFrame(left: DesktopFrame | undefined, right: DesktopFrame): boolean {
   return left !== undefined && left.columns === right.columns && left.rows === right.rows &&
     left.cellWidthPx === right.cellWidthPx && left.cellHeightPx === right.cellHeightPx &&
-    left.centered === right.centered && left.visible === right.visible && left.minimized === right.minimized;
+    left.centered === right.centered && left.visible === right.visible && left.minimized === right.minimized &&
+    left.paperRows === right.paperRows;
 }
 
 function positive(value: number): number {
@@ -170,6 +173,7 @@ export class DesktopNote {
       centered: frame.centered,
       visible: frame.visible,
       minimized: frame.minimized,
+      paperRows: frame.paperRows,
     };
     if (sameFrame(this.#frame, next)) return;
     this.#interactionScene++;
@@ -202,7 +206,7 @@ export class DesktopNote {
     if (!frame) return;
     if (frame.visible && !frame.minimized) {
       const baseScale = Math.min(52, Math.max(1, frame.columns - 3)) * frame.cellWidthPx / 520;
-      const height = Math.max(1, Math.floor(Math.max(1, frame.rows - COMPOSER_ROWS) * frame.cellHeightPx));
+      const height = Math.max(1, Math.floor(Math.max(1, Math.min(frame.rows - COMPOSER_ROWS, frame.paperRows ?? Infinity)) * frame.cellHeightPx));
       const rowHeight = frame.cellHeightPx / baseScale;
       // The startup card stays compact. Centered cards have equal room on both sides.
       const maxWidth = frame.centered ? Math.max(1, frame.columns - 3) * frame.cellWidthPx / baseScale : PAPER_WIDTH;
@@ -262,8 +266,10 @@ export class DesktopNote {
     try {
       // A false return still accepts this frame. Keep only the latest state until
       // drain, instead of accumulating PNGs or geometry writes in the stream.
-      this.#blocked = !child.stdin.write(`${JSON.stringify({ op: "frame", ...frame, scene: this.#interactionScene, ...(png ? { png } : {}) })}\n`);
-      this.#sentFrame = frame;
+      // A previous, taller PNG must not cover a form while its fitted paper is rasterizing.
+      const sent = frame.paperRows !== undefined && !raster ? { ...frame, visible: false } : frame;
+      this.#blocked = !child.stdin.write(`${JSON.stringify({ op: "frame", ...sent, scene: this.#interactionScene, ...(png ? { png } : {}) })}\n`);
+      this.#sentFrame = sent;
       this.#sentScene = this.#interactionScene;
       if (png) this.#sentRasterKey = raster!.key;
     } catch (error) {

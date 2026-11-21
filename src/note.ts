@@ -40,10 +40,56 @@ function graphicPaperHit(shape: PaperShape, scale: number, cell: RasterRequest["
 
 // Deliberately independent of the host theme: sticky-paper yellow, dark ink.
 const PAPER = "\x1b[48;2;255;231;128m\x1b[38;2;41;38;22m";
+const QUESTION_PAPER = "\x1b[48;2;135;206;235m\x1b[38;2;16;38;75m";
 const SHADOW = "\x1b[48;2;34;33;27m";
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const NORMAL = "\x1b[22m";
+
+/** Shared ANSI paper geometry; shadows remain outside the colored paper body. */
+function ansiPaper(width: number, paper: string) {
+  const shadow = width >= 8 ? 1 : 0;
+  const cardWidth = width - shadow;
+  const padding = cardWidth >= 8 ? 2 : 0;
+  const inner = Math.max(1, cardWidth - padding * 2);
+  const row = (text: string, bold = false) => {
+    const fitted = truncateToWidth(text, inner);
+    return paper + " ".repeat(padding) + (bold ? BOLD : "") + fitted + NORMAL +
+      " ".repeat(Math.max(0, cardWidth - padding - visibleWidth(fitted))) + RESET +
+      (shadow ? SHADOW + " " + RESET : "");
+  };
+  const edge = (top: boolean) => cardWidth >= 4
+    ? paper + (top ? "╭" : "╰") + "─".repeat(cardWidth - 2) + (top ? "╮" : "╯") + RESET + " ".repeat(shadow)
+    : row("");
+  const center = (text: string) => " ".repeat(Math.max(0, Math.floor((inner - visibleWidth(text)) / 2))) + text;
+  const bottomShadow = " " + SHADOW + " ".repeat(cardWidth) + RESET;
+  return { shadow, cardWidth, inner, row, edge, center, bottomShadow };
+}
+
+/** Passive question paper for native form composers; the row budget includes its shadow. */
+export function questionPaperRows(title: string, width: number, rows: number): readonly string[] {
+  width = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+  const budget = Number.isFinite(rows) ? Math.max(0, Math.min(6, Math.floor(rows))) : 0;
+  if (!width || !budget) return [];
+  const paper = ansiPaper(width, QUESTION_PAPER);
+  const signRows = wrapLabel("ANSWER NEEDED", 2, paper.inner).length;
+  // Drop decoration before sacrificing the question or the project's headline.
+  const framed = budget >= signRows + 3;
+  const shadow = paper.shadow && budget >= signRows + 4;
+  const contentRows = budget - (framed ? 2 : 0) - (shadow ? 1 : 0);
+  const sign = wrapLabel("ANSWER NEEDED", Math.min(2, Math.max(1, contentRows - 1)), paper.inner);
+  const result = framed ? [paper.edge(true)] : [];
+  for (const line of sign) result.push(paper.row(paper.center(line), true));
+  const titleRows = Math.min(2, contentRows - sign.length);
+  if (titleRows > 0) {
+    for (const line of wrapLabel(title.toUpperCase(), titleRows, paper.inner)) {
+      result.push(paper.row(paper.center(line), true));
+    }
+  }
+  if (framed) result.push(paper.edge(false));
+  if (shadow) result.push(paper.bottomShadow);
+  return result;
+}
 
 interface StickyNoteOptions {
   requestRender?: () => void;
@@ -297,31 +343,19 @@ export class StickyNote implements Component {
       this.#surface = this.#fallbackSurface;
       return this.#rows;
     }
-    const shadow = width >= 8 ? 1 : 0;
-    const cardWidth = width - shadow;
-    const padding = cardWidth >= 8 ? 2 : 0;
-    const inner = Math.max(1, cardWidth - padding * 2);
-    const row = (text: string, bold = false, paper = PAPER) => {
-      const fitted = truncateToWidth(text, inner);
-      return paper + " ".repeat(padding) + (bold ? BOLD : "") + fitted + NORMAL +
-        " ".repeat(Math.max(0, cardWidth - padding - visibleWidth(fitted))) + RESET +
-        (shadow ? SHADOW + " " + RESET : "");
-    };
-    const edge = (top: boolean) => cardWidth >= 4
-      ? PAPER + (top ? "╭" : "╰") + "─".repeat(cardWidth - 2) + (top ? "╮" : "╯") + RESET + " ".repeat(shadow)
-      : row("");
+    const waiting = this.#fx?.fun && !this.#fx.dnd && this.#fx.motion !== "crumple" && this.#fx.attention === "waiting";
+    const { shadow, cardWidth, inner, row, edge, center, bottomShadow } = ansiPaper(width, waiting ? QUESTION_PAPER : PAPER);
     const rows = [edge(true)];
     const labels = effectLabels(this.#fx);
     const handoff = this.#fx?.fun && !this.#fx.dnd && this.#fx.motion !== "crumple" &&
       (this.#fx.attention === "waiting" || this.#fx.motion === "turnDone" || this.#fx.motion === "victory");
     if (handoff) {
-      const sign = this.#fx?.attention === "waiting" ? "\x1b[48;2;116;50;23m\x1b[38;2;255;246;220m" : PAPER;
       for (const line of wrapLabel(labels[0], 2, inner)) {
-        rows.push(row(" ".repeat(Math.max(0, Math.floor((inner - visibleWidth(line)) / 2))) + line, true, sign));
+        rows.push(row(center(line), true));
       }
     }
     for (const line of wrapLabel(this.#note.title.toUpperCase(), 2, inner)) {
-      rows.push(row(" ".repeat(Math.max(0, Math.floor((inner - visibleWidth(line)) / 2))) + line, true));
+      rows.push(row(center(line), true));
     }
     rows.push(row(""));
     if (this.#note.tasks.length === 0) {
@@ -339,7 +373,7 @@ export class StickyNote implements Component {
       for (const line of wrapLabel(labels[i], 2, inner)) rows.push(row(line, true));
     }
     rows.push(row(""), edge(false));
-    if (shadow) rows.push(" " + SHADOW + " ".repeat(cardWidth) + RESET);
+    if (shadow) rows.push(bottomShadow);
     this.#width = width;
     this.#maxRows = maxRows;
     this.#rows = rows.length > maxRows ? rows.slice(0, maxRows) : rows;

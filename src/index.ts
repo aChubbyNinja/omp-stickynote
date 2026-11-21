@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getCellDimensions, TERMINAL, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
-import { StickyNote } from "./note.ts";
+import { questionPaperRows, StickyNote } from "./note.ts";
 import { MinimizedNote } from "./minimized.ts";
 import { cleanLabel, customTodoUpdates, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, todoSnapshot, type SavedNote, type Task } from "./state.ts";
 import { DesktopNote } from "./desktop.ts";
@@ -12,6 +12,7 @@ import { OfficeBoard } from "./board.ts";
 
 const WIDGET = "omp-stickynote.owner";
 const FUN_ENTRY = "omp-stickynote.fun";
+const QUESTION_FRAME: VisualFrame = { fun: true, attention: "waiting", crew: "none", checks: [], step: 0 };
 interface SavedFun {
   version: 1;
   enabled: boolean;
@@ -265,12 +266,12 @@ export default function stickynote(pi: ExtensionAPI): void {
     tui.terminal.write(output + restoreCursor() + "\x1b[?2026l");
   }
 
-  function paintDesktop(visible = true): void {
+  function paintDesktop(visible = true, paperRows?: number): void {
     if (!desktop || !tui) return;
     const cell = getCellDimensions();
     desktop.render({
       columns: tui.terminal.columns, rows: tui.terminal.rows,
-      cellWidthPx: cell.widthPx, cellHeightPx: cell.heightPx,
+      cellWidthPx: cell.widthPx, cellHeightPx: cell.heightPx, paperRows,
       centered, minimized: !!saved.minimized, visible: visible && !saved.hidden && !crumpled && !boardOpen,
     });
   }
@@ -281,7 +282,7 @@ export default function stickynote(pi: ExtensionAPI): void {
     if (saved.minimized) return;
     const next = content();
     note.update(next, fx.frame);
-    desktop?.update(next, fx.frame);
+    desktop?.update(next, questionSignalVisible() ? QUESTION_FRAME : fx.frame);
     const entry = tui?.overlayStack.find(item => item.component === note);
     if (entry?.options) entry.options.width = overlayWidth();
     tui?.requestRender(true);
@@ -456,12 +457,35 @@ export default function stickynote(pi: ExtensionAPI): void {
           process.env.OMP_STICKY_RENDERER !== "terminal") {
         ctx.ui.notify("Sticky note is using terminal rendering. Build native/bin/build in the extension checkout for a scrollback-safe desktop overlay.", "info");
       }
+      let pinnedQuestion = false;
+      let showingFormPaper = false;
       removePaintListener = liveTui.addPaintListener(frame => {
         if (owner !== lifecycle || !active(ctx)) return;
         if (frame.reset) historyRows = 0;
         historyRows += frame.history.length;
         if (frame.alt || boardOpen || !visible()) { paintDesktop(false); return; }
-        if (questionDialogOpen()) { paintDesktop(false); return; }
+        const formPaper = !!desktop && questionSignalVisible();
+        if (formPaper !== showingFormPaper && fx) {
+          showingFormPaper = formPaper;
+          desktop?.update(content(), formPaper ? QUESTION_FRAME : fx.frame);
+        }
+        if (questionDialogOpen()) {
+          // Host versions place the widget on different sides of the form.
+          // Fit above the painted Ask panel itself; unknown/clipped panels
+          // use the inline paper rather than risk covering a control.
+          const edge = formPaper && desktop?.ready
+            ? frame.viewport.findIndex(line => line.includes("╭") && /^╭─+ Ask\b/u.test(cleanLabel(line)))
+            : -1;
+          const room = edge - Math.max(0, frame.viewport.length - frame.rows) - 1;
+          const pin = room >= 7;
+          if (pinnedQuestion !== pin) {
+            pinnedQuestion = pin;
+            liveTui.requestRender();
+          }
+          paintDesktop(pin, pin ? room : undefined);
+          return;
+        }
+        pinnedQuestion = false;
         if (hasStarted && !centered && historyRows + frame.viewport.length > frame.rows) {
           clearGraphics();
           centered = true;
@@ -502,16 +526,15 @@ export default function stickynote(pi: ExtensionAPI): void {
       mount();
       paint();
       const component: Component = {
-        // This sanctioned composer row stays beside inline host ask/approval
-        // forms, including eval-dispatched forms, without painting over controls
-        // or registering any keyboard, mouse, or focus handler.
+        // A read-only paper docks beside the controls when the pinned desktop
+        // paper cannot fit. Neither presentation takes focus from the form.
         render: width => {
-          if (owner !== lifecycle || !active(ctx) || !questionSignalVisible() || width < 1) return [];
-          const lines = width >= 35 && liveTui.terminal.rows >= 24
-            ? [" █▀█ █▀▀ █▀█ █   █ █    ", " █▀▄ ██▄ █▀▀ █▄▄  █     ", "     ANSWER NEEDED      "]
-            : [" ? ANSWER NEEDED ".slice(0, width)];
-          const margin = " ".repeat(Math.floor((width - lines[0].length) / 2));
-          return lines.map(line => margin + `\x1b[1;38;2;255;246;220;48;2;116;50;23m${line}\x1b[0m`);
+          if (owner !== lifecycle || !active(ctx) || !questionSignalVisible() || width < 1 || (pinnedQuestion && desktop?.ready)) return [];
+          const height = liveTui.terminal.rows;
+          const cardWidth = Math.min(overlayWidth(), width);
+          const margin = " ".repeat(Math.floor((width - cardWidth) / 2));
+          const budget = Math.max(1, Math.min(6, Math.floor(height / 5)));
+          return questionPaperRows(content().title, cardWidth, budget).map(row => margin + row);
         },
         dispose: () => { if (owner === lifecycle && note === ownedNote) stop(); else ownedNote.dispose(); },
       };

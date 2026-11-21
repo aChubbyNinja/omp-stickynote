@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL, visibleWidth } from "@oh-my-pi/pi-tui";
-import { StickyNote } from "../../src/note.ts";
+import { questionPaperRows, StickyNote } from "../../src/note.ts";
 import { cleanLabel } from "../../src/state.ts";
 import { headlineLayout, MAX_PAPER_WIDTH, PAPER_WIDTH } from "../../src/paper.ts";
 import { OfficeBoard } from "../../src/board.ts";
@@ -48,13 +48,59 @@ export default async function noteContract(pi: ExtensionAPI): Promise<void> {
   const fullCard = { title: "Across the room", tasks: Array.from({ length: 3 }, () => ({ text: "A long task that wraps to a second line", done: false })) };
   note.update(fullCard, activeFrame);
   assert.ok(note.render(36).map(cleanLabel).some(row => /WORKING.*👷.*👷/.test(row)), "ANSI workers must share the status row");
+  const waitingFrame = { ...activeFrame, attention: "waiting", crew: "none" } as const;
+  const questionNote = {
+    title: "Release dashboard",
+    tasks: [{ text: "Verify checkout", done: true }, { text: "Ship release", done: false }],
+  };
+  const bluePaper = "\x1b[48;2;135;206;235m\x1b[38;2;16;38;75m";
+  const yellowPaper = "\x1b[48;2;255;231;128m\x1b[38;2;41;38;22m";
+  note.update(questionNote, waitingFrame);
+  const waitingRows = note.render(38);
+  const waitingText = waitingRows.map(cleanLabel).join("\n");
+  for (const expected of ["ANSWER NEEDED", "RELEASE DASHBOARD", "[x] Verify checkout", "[ ] Ship release"]) {
+    assert.ok(waitingText.includes(expected), `Waiting paper must preserve ${expected}`);
+  }
+  assert.ok(waitingRows.slice(0, -1).every(row => row.startsWith(bluePaper)), "The entire waiting paper, including borders and checklist, must be sky-blue with navy ink");
+  note.update(questionNote, activeFrame);
+  assert.ok(note.render(38).slice(0, -1).every(row => row.startsWith(yellowPaper)), "Answering must restore normal yellow paper");
+  assert.ok(note.render(38).every(row => !row.includes("ANSWER NEEDED") && !row.includes(bluePaper)));
+  for (const quietFrame of [
+    { ...waitingFrame, fun: false },
+    { ...waitingFrame, dnd: "DEEP WORK" as const },
+    { ...waitingFrame, motion: "crumple" as const },
+  ]) {
+    note.update(questionNote, quietFrame);
+    assert.ok(note.render(38).every(row => !row.includes(bluePaper) && !row.includes("ANSWER NEEDED")), "Fun-off, DND, and crumpling must suppress question styling");
+  }
   const shortPane = new StickyNote({ maxRows: () => 4 });
-  shortPane.update(fullCard, { ...activeFrame, attention: "waiting", crew: "none" });
+  shortPane.update(fullCard, waitingFrame);
   assert.ok(shortPane.render(24).map(cleanLabel).some(row => row.includes("ANSWER NEEDED")), "Long tasks must not push a question off a short terminal");
   shortPane.update(fullCard, { ...activeFrame, attention: "finished", crew: "none", motion: "turnDone", step: 5 });
   assert.ok(shortPane.render(24).map(cleanLabel).some(row => row.includes("TURN DONE")), "Completion must stay legible in the same short pane");
   shortPane.dispose();
   note.dispose();
+
+  const compactQuestion = questionPaperRows("Release dashboard", 38, 6);
+  assert.ok(compactQuestion.slice(0, -1).every(row => row.startsWith(bluePaper)), "Form paper must reuse the waiting note's full blue surface and navy ink");
+  assert.match(compactQuestion.map(cleanLabel).join("\n"), /ANSWER NEEDED\nRELEASE DASHBOARD/);
+  const safeQuestion = questionPaperRows("\x1b]52;c;secret\x07Release dashboard", 38, 6);
+  assert.deepEqual(safeQuestion, compactQuestion, "Form paper must sanitize terminal controls in project titles");
+  for (const width of [1, 4, 8, 12, 24, 38, 64]) {
+    for (const budget of [0, 1, 2, 3, 4, 5, 6, 12]) {
+      const paper = questionPaperRows("项目 👩‍💻 dashboard", width, budget);
+      assert.ok(paper.length <= Math.min(6, budget), "Compact paper must honor its row budget including decoration");
+      assert.ok(paper.every(row => visibleWidth(row) === width), "Compact paper must honor the caller's width in terminal cells");
+      assert.ok(paper.every(row => row.trimEnd().endsWith("\x1b[0m")), "Paper rows must not leak ANSI styling into form controls");
+      assert.ok(paper.every(row => !/[\x00-\x1f\x7f-\x9f]/.test(row.replace(/\x1b\[[0-9;]*m/g, ""))), "Passive paper must contain no cursor, pointer, image, or terminal-mode controls");
+      if (width >= 24 && budget > 0) assert.ok(paper.some(row => row.includes("ANSWER NEEDED")), "Even a one-row pane must retain the question heading when it fits");
+      if (width >= 24 && budget >= 2) assert.ok(paper.some(row => row.includes("项目")), "Small panes must drop decoration before dropping the project title");
+    }
+  }
+  assert.deepEqual(questionPaperRows("Project", 0, 6), []);
+  assert.deepEqual(questionPaperRows("Project", Number.NaN, 6), []);
+  assert.deepEqual(questionPaperRows("Project", 38, Number.NaN), []);
+  assert.ok(questionPaperRows("Project", 24.9, 5.9).every(row => visibleWidth(row) === 24), "Fractional geometry must use whole terminal cells");
 
   const sessions = [
     { id: "local123456", name: "Desk", self: true, snapshot: { title: "Dashboard", attention: "working" as const, tasks: [{ text: "Render cards", done: true }] } },
@@ -148,6 +194,7 @@ export default async function noteContract(pi: ExtensionAPI): Promise<void> {
     graphic.render(54);
   }, 4);
   try {
+    assert.deepEqual(questionPaperRows("Release dashboard", 38, 6), compactQuestion, "Native image support must not turn form paper into an active or graphical component");
     graphic.render(54);
     graphic.update(workload, { ...frame, step: ++pose });
     graphic.render(54);

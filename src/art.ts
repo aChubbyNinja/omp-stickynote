@@ -12,6 +12,11 @@ export function visualFrameKey(fx?: VisualFrame): string {
   if (!fx) return "";
   const dnd = fx.dnd ?? "";
   if (!fx.fun || dnd) return fx.motion === "crumple" ? `${dnd}/crumple/${fx.step}` : dnd;
+  if (fx.attention === "waiting" && fx.motion !== "crumple") {
+    // The waiting paper is steady: pulse frames and hidden crew/stamps have no visible ink.
+    const motion = fx.motion === "pulse" ? undefined : fx.motion;
+    return `waiting/${motion ?? ""}/${motion ? fx.step : ""}/${motion === "check" || motion === "victory" ? fx.checks.join(",") : ""}`;
+  }
   return `${dnd}/${fx.attention}/${fx.crew}/${fx.stamp ?? ""}/${fx.motion ?? ""}/${fx.motion ? fx.step : ""}/${fx.motion === "check" || fx.motion === "victory" ? fx.checks.join(",") : ""}`;
 }
 
@@ -43,6 +48,7 @@ export function semanticFrameKey(fx?: VisualFrame): string {
 /** Reserve only the rows that have visible status or crew artwork. */
 export function paperRailHeight(fx?: VisualFrame): number {
   if (!fx?.fun || fx.dnd) return 0;
+  if (fx.attention === "waiting" && fx.motion !== "crumple") return 0;
   return fx.crew === "none" ? 52 : 76 + (fx.stamp ? 36 : 0);
 }
 
@@ -118,31 +124,34 @@ export function paperArt(fx: VisualFrame | undefined, width: number, height: num
   }
   if (!fx || ((!fx.fun || fx.dnd) && fx.motion !== "crumple")) return { ornaments, overlay, transform, opacity, foldout, foldoutHeight };
   if (fx.fun && !fx.dnd) {
+    const waiting = fx.attention === "waiting" && fx.motion !== "crumple";
     const right = width - 64;
     const curl = fx.motion === "flutter" || fx.motion === "wave" ? [22, 38, 52, 43, 30, 22][step] : 22;
-    ornaments += `<path d="M${right - curl} ${height + 5} Q${right + 8} ${height + 12} ${right + 8} ${height - curl}" fill="#9d8132" opacity="0.18"/><path d="M${right - curl} ${height + 5} Q${right - 5} ${height - 4} ${right + 8} ${height - curl} Q${right - curl - 1} ${height - curl + 4} ${right - curl} ${height + 5} Z" fill="url(#curl)" stroke="#d6b453" stroke-width="0.7"/>`;
-    const attention = ({ idle: "READY", working: "WORKING", waiting: "YOUR TURN", finished: "FINISHED" })[fx.attention];
-    const color = ({ idle: "#49452e", working: "#24533c", waiting: "#87401f", finished: "#24534b" })[fx.attention];
-    const railY = fx.crew === "none" ? height - 44 : height - 55;
-    const badgeWidth = attention.length * 16 + 70;
-    const badge = fx.attention === "working"
-      ? `<path d="M0 0 H${badgeWidth - 12} l12 20 -12 20 H0 Z"/>`
-      : fx.attention === "waiting"
-        ? `<path d="M10 0 H${badgeWidth - 10} l10 10 v20 l-10 10 H10 L0 30 V10 Z"/>`
-        : `<rect width="${badgeWidth}" height="40" rx="${fx.attention === "finished" ? 20 : 6}"/>`;
-    const icon = ({
-      idle: '<circle cx="23" cy="20" r="10"/><path d="M18 20 h10"/>',
-      working: '<path d="M14 10 h18 M14 30 h18 M16 10 l14 20 M30 10 L16 30"/>',
-      waiting: '<path d="M23 10 v12 M23 29 v0.1" stroke-width="4"/>',
-      finished: '<path d="M13 20 l7 7 13 -15" stroke-width="3"/>',
-    })[fx.attention];
-    ornaments += `<g transform="translate(32 ${railY})"><g fill="${color}">${badge}</g><g fill="none" stroke="#fff9de" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}${fx.motion === "pulse" ? `<circle cx="23" cy="20" r="${[14, 16, 18, 17, 15, 14][step]}" opacity="0.45"/>` : ""}</g>${lettering(attention, 49, 29, 26, "#fff9de")}</g>`;
-    if (fx.stamp) {
-      const stampWidth = fx.stamp.length * 10 + 24;
-      const stampY = fx.crew === "none" ? railY + 6 : height - 108;
-      ornaments += `<g transform="translate(${right - stampWidth - 7} ${stampY}) rotate(-4 ${stampWidth / 2} 15)" opacity="0.9"><rect width="${stampWidth}" height="30" rx="3" fill="none" stroke="#85553d" stroke-width="2"/><rect x="3" y="3" width="${stampWidth - 6}" height="24" rx="2" fill="none" stroke="#85553d" stroke-width="0.7"/>${lettering(fx.stamp, stampWidth / 2, 21, 16, "#85553d", 'text-anchor="middle"')}</g>`;
+    ornaments += `<path d="M${right - curl} ${height + 5} Q${right + 8} ${height + 12} ${right + 8} ${height - curl}" fill="${waiting ? "#315d85" : "#9d8132"}" opacity="0.18"/><path d="M${right - curl} ${height + 5} Q${right - 5} ${height - 4} ${right + 8} ${height - curl} Q${right - curl - 1} ${height - curl + 4} ${right - curl} ${height + 5} Z" fill="url(#curl)" stroke="${waiting ? "#599bc2" : "#d6b453"}" stroke-width="0.7"/>`;
+    if (!waiting) {
+      const attention = ({ idle: "READY", working: "WORKING", waiting: "YOUR TURN", finished: "FINISHED" })[fx.attention];
+      const color = ({ idle: "#49452e", working: "#24533c", waiting: "#87401f", finished: "#24534b" })[fx.attention];
+      const railY = fx.crew === "none" ? height - 44 : height - 55;
+      const badgeWidth = attention.length * 16 + 70;
+      const badge = fx.attention === "working"
+        ? `<path d="M0 0 H${badgeWidth - 12} l12 20 -12 20 H0 Z"/>`
+        : fx.attention === "waiting"
+          ? `<path d="M10 0 H${badgeWidth - 10} l10 10 v20 l-10 10 H10 L0 30 V10 Z"/>`
+          : `<rect width="${badgeWidth}" height="40" rx="${fx.attention === "finished" ? 20 : 6}"/>`;
+      const icon = ({
+        idle: '<circle cx="23" cy="20" r="10"/><path d="M18 20 h10"/>',
+        working: '<path d="M14 10 h18 M14 30 h18 M16 10 l14 20 M30 10 L16 30"/>',
+        waiting: '<path d="M23 10 v12 M23 29 v0.1" stroke-width="4"/>',
+        finished: '<path d="M13 20 l7 7 13 -15" stroke-width="3"/>',
+      })[fx.attention];
+      ornaments += `<g transform="translate(32 ${railY})"><g fill="${color}">${badge}</g><g fill="none" stroke="#fff9de" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}${fx.motion === "pulse" ? `<circle cx="23" cy="20" r="${[14, 16, 18, 17, 15, 14][step]}" opacity="0.45"/>` : ""}</g>${lettering(attention, 49, 29, 26, "#fff9de")}</g>`;
+      if (fx.stamp) {
+        const stampWidth = fx.stamp.length * 10 + 24;
+        const stampY = fx.crew === "none" ? railY + 6 : height - 108;
+        ornaments += `<g transform="translate(${right - stampWidth - 7} ${stampY}) rotate(-4 ${stampWidth / 2} 15)" opacity="0.9"><rect width="${stampWidth}" height="30" rx="3" fill="none" stroke="#85553d" stroke-width="2"/><rect x="3" y="3" width="${stampWidth - 6}" height="24" rx="2" fill="none" stroke="#85553d" stroke-width="0.7"/>${lettering(fx.stamp, stampWidth / 2, 21, 16, "#85553d", 'text-anchor="middle"')}</g>`;
+      }
+      ornaments += crewArt(fx, width, height, fx.motion ? step : 0);
     }
-    ornaments += crewArt(fx, width, height, fx.motion ? step : 0);
     if (fx.motion === "flutter" || fx.motion === "wave") {
       const angle = [0, -1.1, 1.4, -0.8, 0.5, 0][step];
       transform = `rotate(${angle} ${width / 2 - 24} 12) translate(0 ${[0, -3, -5, -3, -1, 0][step]})`;
@@ -151,16 +160,7 @@ export function paperArt(fx: VisualFrame | undefined, width: number, height: num
         ornaments += `<g fill="none" stroke="#6c9b85" stroke-width="2" opacity="${(6 - step) / 8}"><circle cx="${width - 98}" cy="${height - 25}" r="${radius}"/><circle cx="${width - 98}" cy="${height - 25}" r="${radius + 10}"/></g>`;
       }
     }
-    if (fx.attention === "waiting" && fx.motion !== "crumple") {
-      // A straight, solid sign reads differently from the tilted confetti stamp
-      // even in monochrome. Keep the sign inside the interactive paper bounds.
-      const w = Math.min(width - 100, 500);
-      overlay = `<g transform="translate(${width / 2 - 24 - w / 2} ${height / 2 - 52})">
-<rect width="${w}" height="104" rx="10" fill="#743217"/>
-<rect x="5" y="5" width="${w - 10}" height="94" rx="7" fill="none" stroke="#ffd38a" stroke-width="2"/>
-${lettering("ANSWER NEEDED", w / 2, 65, 48, "#fff6dc", 'text-anchor="middle"')}
-</g>`;
-    } else if (fx.motion === "victory" || fx.motion === "turnDone") {
+    if (!waiting && (fx.motion === "victory" || fx.motion === "turnDone")) {
       const colors = ["#be5946", "#4d8b75", "#bd8a24", "#7074a1"];
       for (let i = 0; i < 24; i++) {
         const x = 15 + ((i * 79 + step * (i % 2 ? 9 : -7) + width) % (width - 65));

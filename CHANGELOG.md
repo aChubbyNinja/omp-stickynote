@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Questions now turn the sticky note blue instead of replacing it with a reply icon. The paper stays pinned when it fits above the question; a compact blue note keeps smaller forms readable and interactive.
+
 ## 1.7.0 — 2026-11-21
 
 - **TURN DONE** and **SHIPPED** now hold their final frame without a timer or repeating animation. A new prompt or question replaces the completed state.
