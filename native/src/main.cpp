@@ -15,7 +15,7 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0)) {
         std::puts("Usage: omp-stickynote-overlay --parent-pid PID\n"
-                  "Transparent, input-free Hyprland companion for OMP sticky notes.\n"
+                  "Click-through Hyprland companion for OMP sticky notes; minimized tiles restore on left-click.\n"
                   "Reads newline-delimited frame JSON from stdin; exits on EOF or OMP death.\n"
                   "Options: --help, --version");
         return 0;

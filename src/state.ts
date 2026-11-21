@@ -15,6 +15,7 @@ export interface Note {
 export interface SavedNote {
   version: 1;
   hidden: boolean;
+  minimized?: boolean;
   manual: Note | null;
 }
 
@@ -43,7 +44,9 @@ function record(value: unknown): value is Record<string, unknown> {
 
 export function parseSaved(value: unknown): SavedNote | undefined {
   if (!record(value) || value.version !== 1 || typeof value.hidden !== "boolean") return;
-  if (value.manual === null) return { version: 1, hidden: value.hidden, manual: null };
+  const saved: SavedNote = { version: 1, hidden: value.hidden, manual: null };
+  if (value.minimized === true) saved.minimized = true;
+  if (value.manual === null) return saved;
   const note = value.manual;
   if (!record(note) || typeof note.title !== "string" || !cleanLabel(note.title)) return;
   if (!Array.isArray(note.tasks) || note.tasks.length < 1 || note.tasks.length > 3) return;
@@ -52,7 +55,8 @@ export function parseSaved(value: unknown): SavedNote | undefined {
     if (!record(task) || typeof task.text !== "string" || typeof task.done !== "boolean") return;
     tasks.push({ text: cleanLabel(task.text), done: task.done });
   }
-  return { version: 1, hidden: value.hidden, manual: { title: cleanLabel(note.title), tasks } };
+  saved.manual = { title: cleanLabel(note.title), tasks };
+  return saved;
 }
 
 /** Undefined means not a valid snapshot; [] means the task list was cleared. */

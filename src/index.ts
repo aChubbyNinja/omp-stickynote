@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getCellDimensions, TERMINAL, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
+import { MinimizedNote } from "./minimized.ts";
 import { cleanLabel, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, todoSnapshot, type SavedNote, type Task } from "./state.ts";
 import { DesktopNote } from "./desktop.ts";
 import { headlineLayout, PAPER_WIDTH } from "./paper.ts";
@@ -18,6 +19,7 @@ interface SavedFun {
 const HELP = [
   "/sticky Title | task one | task two | task three",
   "/sticky auto · /sticky hide · /sticky show · /sticky done 1",
+  "/sticky minimize — collapse to a yellow square; click it or use /sticky show to reopen",
   "/sticky boring mode — turn local effects off · /sticky fun on — turn them back on",
   "/sticky dnd [build|off] — DEEP WORK / WAITING ON A BUILD; Ctrl+Alt+D toggles",
   "/sticky crumple — dismiss visually; show restores the unchanged note",
@@ -48,6 +50,8 @@ export default function stickynote(pi: ExtensionAPI): void {
   let todoGeneration: string | undefined;
   let tui: TUI | undefined;
   let overlay: OverlayHandle | undefined;
+  let mounted: Component | undefined;
+  let tile: MinimizedNote | undefined;
   let timer: NodeJS.Timeout | undefined;
   let lastLeaf: string | null | undefined;
   let lastTitle: string | undefined;
@@ -122,6 +126,13 @@ export default function stickynote(pi: ExtensionAPI): void {
     crumpled = false;
     crumpling = false;
     fx?.note(content(), true);
+  }
+
+  function expandTile(ctx: ExtensionContext): void {
+    if (!active(ctx) || !saved.minimized || !visible() || crumpling || boardOpen) return;
+    saved = { ...saved, minimized: false };
+    restoreCard();
+    save(ctx);
   }
 
   const activity = registerActivity(pi, {
@@ -240,13 +251,14 @@ export default function stickynote(pi: ExtensionAPI): void {
     desktop.render({
       columns: tui.terminal.columns, rows: tui.terminal.rows,
       cellWidthPx: cell.widthPx, cellHeightPx: cell.heightPx,
-      centered, visible: visible && !saved.hidden && !crumpled && !boardOpen,
+      centered, minimized: !!saved.minimized, visible: visible && !saved.hidden && !crumpled && !boardOpen,
     });
   }
 
   function paint(): void {
     clearGraphics();
     if (!fx) return;
+    if (saved.minimized) return;
     const next = content();
     note.update(next, fx.frame);
     desktop?.update(next, fx.frame);
@@ -258,15 +270,25 @@ export default function stickynote(pi: ExtensionAPI): void {
   function unmount(): void {
     clearGraphics();
     paintDesktop(false);
+    tile?.deactivate();
     overlay?.hide();
     overlay = undefined;
+    mounted = undefined;
     tui?.requestRender(true);
   }
 
   function mount(): void {
-    if (!tui || !visible() || boardOpen || overlay || desktop) return;
+    if (!tui || !visible() || boardOpen) return;
+    if (desktop) {
+      // Only the paint listener knows whether a host dialog or alternate buffer covers us.
+      tui.requestRender();
+      return;
+    }
+    const component = saved.minimized ? tile : note;
+    if (!component || mounted === component) return;
+    if (overlay) unmount();
     const previous = tui.getFocused();
-    overlay = tui.showOverlay(note, {
+    overlay = tui.showOverlay(component, component === tile ? tile.overlayOptions : {
       anchor: centered ? "top-center" : "top-right",
       width: overlayWidth(),
       margin: { top: 0, right: 2, left: 1, bottom: 4 },
@@ -275,9 +297,11 @@ export default function stickynote(pi: ExtensionAPI): void {
     // OMP 18.21 has no passive overlay option. Its public stack uses `released`
     // for sheets that remain visible without holding keyboard focus. Keep this
     // compatibility seam here; never replace the editor or intercept keystrokes.
-    const entry = tui.overlayStack.find(item => item.component === note);
+    mounted = component;
+    const entry = tui.overlayStack.find(item => item.component === component);
     if (entry) entry.released = true;
     tui.setFocus(previous);
+    if (component === tile) tile.activate(tui);
   }
 
   function sync(ctx: ExtensionContext, force = false): void {
@@ -328,6 +352,8 @@ export default function stickynote(pi: ExtensionAPI): void {
     removePaintListener?.();
     removePaintListener = undefined;
     unmount();
+    tile?.dispose();
+    tile = undefined;
     desktop?.dispose();
     desktop = undefined;
     note.dispose();
@@ -370,9 +396,15 @@ export default function stickynote(pi: ExtensionAPI): void {
       if (owner !== lifecycle || !active(ctx)) return { render: () => [] };
       tui = liveTui;
       const ownedNote = note;
+      tile = new MinimizedNote({ onRestore: () => {
+        if (owner === lifecycle && note === ownedNote) expandTile(ctx);
+      } });
       if (DesktopNote.available()) {
         desktop = new DesktopNote({
           onReady: () => { if (owner === lifecycle && note === ownedNote) paint(); },
+          onRestore: () => {
+            if (owner === lifecycle && note === ownedNote) expandTile(ctx);
+          },
           onError: error => {
             if (owner !== lifecycle || note !== ownedNote) return;
             const failed = desktop;
@@ -407,10 +439,11 @@ export default function stickynote(pi: ExtensionAPI): void {
         for (let i = liveTui.overlayStack.length - 1; i >= 0; i--) {
           const entry = liveTui.overlayStack[i];
           if (entry.hidden || entry.options?.visible?.(frame.columns, frame.rows) === false) continue;
-          if (entry.component !== ownedNote) { paintDesktop(false); return; }
+          if (entry.component !== mounted) { paintDesktop(false); return; }
           break;
         }
         if (desktop) { paintDesktop(); return; }
+        if (saved.minimized) return;
         const graphics = ownedNote.graphicsRows;
         if (!graphics) return;
         const width = Math.max(1, Math.min(overlayWidth(), frame.columns - 3));
@@ -479,12 +512,20 @@ export default function stickynote(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("sticky", {
-    description: "Pin a title/tasks; auto, hide, show, done N, boring mode, fun on, dnd, crumple, office",
+    description: "Pin a title/tasks; auto, minimize, hide, show, done N, boring mode, fun on, dnd, crumple, office",
     handler: async (args, ctx) => {
       if (!active(ctx)) return ctx.ui.notify("Stickynote needs the active main interactive OMP terminal.", "warning");
       sync(ctx);
       const input = args.trim();
       if (!input || input === "help") return ctx.ui.notify(HELP, "info");
+      if (input === "minimize") {
+        if (!visible() || crumpling) return ctx.ui.notify("The note is dismissed. Use /sticky show first.", "info");
+        if (!saved.minimized) {
+          saved = { ...saved, minimized: true };
+          save(ctx);
+        }
+        return;
+      }
       if (input === "boring mode" || input === "fun on") {
         const fun = input === "fun on";
         const preference: SavedFun = { version: 1, enabled: fun };
@@ -514,7 +555,7 @@ export default function stickynote(pi: ExtensionAPI): void {
       }
       const wasSharing = office !== undefined;
       if (input === "hide" || input === "show") {
-        saved = { ...saved, hidden: input === "hide" };
+        saved = { ...saved, hidden: input === "hide", minimized: false };
         if (input === "show") restoreCard();
         else if (crumpling) { crumpling = false; fx?.note(content(), true); }
       }
@@ -527,7 +568,7 @@ export default function stickynote(pi: ExtensionAPI): void {
       } else {
         const [heading, ...items] = input.split("|").map(cleanLabel);
         if (!heading || items.length > 3 || items.some(item => !item)) return ctx.ui.notify(HELP, "warning");
-        saved = { version: 1, hidden: false, manual: { title: heading, tasks: (items.length ? items : [""]).map(text => ({ text, done: false })) } };
+        saved = { ...saved, hidden: false, manual: { title: heading, tasks: (items.length ? items : [""]).map(text => ({ text, done: false })) } };
         if (crumpled || crumpling) restoreCard();
       }
       save(ctx);
@@ -548,15 +589,15 @@ export default function stickynote(pi: ExtensionAPI): void {
       const parsed = parseSaved({ version: 1, hidden: false, manual: params });
       const manual = parsed?.manual;
       if (!manual?.title || manual.tasks.some(task => !task.text)) throw new Error("Sticky note labels must contain visible text.");
-      const next: SavedNote = { version: 1, hidden: false, manual };
       if (ctx.mode === "tui") {
         if (!active(ctx)) throw new Error("Sticky note updates require the active main interactive OMP session.");
         sync(ctx);
-        saved = next;
+        saved = { ...saved, hidden: false, manual };
         if (crumpled || crumpling) restoreCard();
         save(ctx);
       } else {
-        pi.appendEntry(ENTRY_TYPE, next);
+        const previous = restore(ctx.sessionManager.getBranch()).saved;
+        pi.appendEntry(ENTRY_TYPE, { ...previous, hidden: false, manual } satisfies SavedNote);
       }
       return { content: [{ type: "text", text: "Sticky note updated." }], details: manual };
     },

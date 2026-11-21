@@ -9,6 +9,8 @@
 #include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QScreen>
 #include <QSGSimpleTextureNode>
 #include <QSGTexture>
@@ -63,6 +65,23 @@ bool hasLayerShell()
     wl_registry_destroy(registry);
     return result >= 0 && found;
 }
+
+QImage minimizedTile()
+{
+    QImage image(DesktopState::MinimizedTileSize, DesktopState::MinimizedTileSize,
+                 QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor("#ffe780"));
+    QPainter painter(&image);
+    painter.setPen(QColor("#b19a44"));
+    painter.drawRect(0, 0, image.width() - 1, image.height() - 1);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor("#fff2af"));
+    painter.drawPolygon(QPolygon{{20, 0}, {27, 7}, {20, 7}});
+    painter.setPen(QPen(QColor("#756124"), 2));
+    painter.drawLine(9, 15, 19, 15);
+    painter.drawLine(14, 10, 14, 20);
+    return image;
+}
 }
 
 void protocolEvent(const QJsonObject &event)
@@ -73,7 +92,8 @@ void protocolEvent(const QJsonObject &event)
     std::fflush(stdout);
 }
 
-RasterItem::RasterItem(QQuickItem *parent) : QQuickItem(parent)
+RasterItem::RasterItem(QQuickItem *parent, std::function<void()> onClick)
+    : QQuickItem(parent), m_onClick(std::move(onClick))
 {
     setFlag(ItemHasContents);
     setClip(true);
@@ -81,6 +101,8 @@ RasterItem::RasterItem(QQuickItem *parent) : QQuickItem(parent)
 
 void RasterItem::setImage(const QImage &image)
 {
+    if (m_image.cacheKey() == image.cacheKey())
+        return;
     m_image = image;
     m_dirty = true;
     update();
@@ -106,6 +128,27 @@ QSGNode *RasterItem::updatePaintNode(QSGNode *old, UpdatePaintNodeData *)
     }
     node->setRect(boundingRect());
     return node;
+}
+
+void RasterItem::mousePressEvent(QMouseEvent *event)
+{
+    m_pressed = event->button() == Qt::LeftButton && boundingRect().contains(event->position());
+    event->setAccepted(m_pressed);
+}
+
+void RasterItem::mouseReleaseEvent(QMouseEvent *event)
+{
+    const bool clicked = m_pressed && event->button() == Qt::LeftButton
+        && boundingRect().contains(event->position());
+    m_pressed = false;
+    event->setAccepted(clicked);
+    if (clicked)
+        m_onClick();
+}
+
+void RasterItem::mouseUngrabEvent()
+{
+    m_pressed = false;
 }
 
 Overlay::Overlay(qint64 parentPid, QObject *parent) : QObject(parent), m_parentPid(parentPid)
@@ -301,14 +344,25 @@ void Overlay::acceptFrame(const QJsonObject &frame)
     const double rows = frame.value("rows").toDouble();
     const double cellWidth = frame.value("cellWidthPx").toDouble();
     const double cellHeight = frame.value("cellHeightPx").toDouble();
+    const bool minimized = frame.value("minimized").toBool();
     if (frame.value("op").toString() != "frame" || columns < 1 || columns > 100000
         || std::floor(columns) != columns || rows < 1 || rows > 100000 || std::floor(rows) != rows
         || !std::isfinite(cellWidth) || !std::isfinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0
-        || !frame.value("visible").isBool() || !frame.value("centered").isBool()) {
+        || !frame.value("visible").isBool() || !frame.value("centered").isBool()
+        || !frame.value("minimized").isBool()) {
         fail(QStringLiteral("Invalid frame fields"));
         return;
     }
-    if (frame.contains("png")) {
+    if (minimized != m_minimized) {
+        // Never resurrect a pre-minimize PNG while the current raster is pending.
+        m_image = {};
+        m_transparentTop = 0;
+        m_restoreRequested = false;
+    }
+    m_minimized = minimized;
+    if (m_minimized && m_tile.isNull())
+        m_tile = minimizedTile();
+    if (!m_minimized && frame.contains("png")) {
         if (!frame.value("png").isString()) {
             fail(QStringLiteral("Frame PNG must be base64 text"));
             return;
@@ -348,9 +402,9 @@ void Overlay::acceptFrame(const QJsonObject &frame)
                 break;
             ++m_transparentTop;
         }
-        if (m_raster)
-            m_raster->setImage(m_image);
     }
+    if (m_raster)
+        m_raster->setImage(m_minimized ? m_tile : m_image);
     m_columns = int(columns);
     m_cellWidth = cellWidth;
     m_cellHeight = cellHeight;
@@ -480,7 +534,7 @@ void Overlay::announceReady()
         return;
     m_ready = true;
     m_startupDeadline.stop();
-    protocolEvent({{"event", "ready"}});
+    protocolEvent({{"event", "ready"}, {"protocol", 2}});
     applyState();
 }
 
@@ -492,10 +546,14 @@ void Overlay::createSurface(QScreen *screen)
     m_surfaceScreen = screen;
     m_window->setColor(Qt::transparent);
     m_window->setTitle(QStringLiteral("OMP sticky note"));
-    // Qt Wayland turns WindowTransparentForInput into an empty wl_region on
-    // every surface commit, including remapping after a workspace switch.
-    m_window->setFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus
-                       | Qt::WindowTransparentForInput | Qt::NoDropShadowWindowHint);
+    // Recreate on mode changes: Qt Wayland applies input transparency to every
+    // surface commit. Only the tiny minimized surface ever accepts pointer input.
+    auto flags = Qt::WindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus
+                                 | Qt::NoDropShadowWindowHint);
+    if (!m_minimized)
+        flags |= Qt::WindowTransparentForInput;
+    m_window->setFlags(flags);
+    m_surfaceMinimized = m_minimized;
     m_layer = LayerShellQt::Window::get(m_window.get());
     m_layer->setScope(QStringLiteral("omp-stickynote-%1-%2").arg(m_parentPid).arg(::getpid()));
     m_layer->setLayer(LayerShellQt::Window::LayerOverlay);
@@ -507,9 +565,16 @@ void Overlay::createSurface(QScreen *screen)
     m_layer->setActivateOnShow(false);
     m_layer->setScreen(screen);
     m_layer->setCloseOnDismissed(false);
-    m_raster = new RasterItem(m_window->contentItem());
-    if (!m_image.isNull())
-        m_raster->setImage(m_image);
+    m_raster = new RasterItem(m_window->contentItem(), [this] {
+        if (!m_minimized || !m_visible || !m_snapshotValid || m_restoreRequested
+            || !m_window || !m_window->isVisible())
+            return;
+        m_restoreRequested = true;
+        m_window->hide();
+        protocolEvent({{"event", "restore"}});
+    });
+    m_raster->setAcceptedMouseButtons(m_minimized ? Qt::LeftButton : Qt::NoButton);
+    m_raster->setImage(m_minimized ? m_tile : m_image);
     connect(m_window.get(), &QQuickWindow::sceneGraphError, this, [this](QQuickWindow::SceneGraphError, const QString &message) {
         fail(QStringLiteral("Qt Quick scene graph: %1").arg(message));
     });
@@ -582,15 +647,17 @@ void Overlay::applyState()
             m_window->hide();
         return;
     }
-    if (!m_window || m_surfaceScreen != screen)
+    if (!m_window || m_surfaceScreen != screen || m_surfaceMinimized != m_minimized)
         createSurface(screen);
     if (!m_ready)
         return;
     const auto bounds = DesktopState::clientRect(owner);
-    const auto rasterRect = DesktopState::placement(bounds, m_image.size(), m_columns,
-                                                    m_cellWidth, m_cellHeight, m_centered, m_transparentTop);
+    const auto rasterRect = m_minimized
+        ? DesktopState::minimizedPlacement(bounds, m_columns, m_cellWidth, m_cellHeight)
+        : DesktopState::placement(bounds, m_image.size(), m_columns,
+                                  m_cellWidth, m_cellHeight, m_centered, m_transparentTop);
     const auto clipped = rasterRect.intersected(bounds).intersected(DesktopState::monitorRect(monitor));
-    const bool show = m_visible && !m_image.isNull() && !clipped.isEmpty()
+    const bool show = m_visible && !m_restoreRequested && (m_minimized || !m_image.isNull()) && !clipped.isEmpty()
         && DesktopState::isVisible(owner, monitor, m_clients);
     m_refreshTimer.setInterval(show ? 150 : 500);
     if (!show) {

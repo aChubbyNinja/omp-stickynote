@@ -1,0 +1,9 @@
+QT += core gui quick network testlib
+CONFIG += c++17 testcase console link_pkgconfig
+TEMPLATE = app
+TARGET = overlay_tests
+PKGCONFIG += wayland-client
+LIBS += -lLayerShellQtInterface
+INCLUDEPATH += ../src
+HEADERS += ../src/overlay.h ../src/desktopstate.h
+SOURCES += overlay_tests.cpp ../src/overlay.cpp ../src/desktopstate.cpp

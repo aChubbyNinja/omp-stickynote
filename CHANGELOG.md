@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.0 — 2026-11-21
+
+- Added `/sticky minimize`: collapse the note into a small yellow `+` square in the upper-right corner. Left-click it or use `/sticky show` to restore the full note with current tasks and checkmarks. The minimized state is saved on the branch; office sharing is unchanged.
+- The Hyprland companion accepts pointer input only on the collapsed 28×28 square. The expanded card stays click-through. Terminal rendering uses a three-column, one-row tile.
+
 ## 1.4.2 — 2026-11-20
 
 - Fixed frame starvation on slower desktop and terminal graphics paths: a finished frame is now shown even if the next pose is already queued. Frames from an old note, activity, or size are still discarded.

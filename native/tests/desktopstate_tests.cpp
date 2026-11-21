@@ -107,6 +107,32 @@ private slots:
         QVERIFY(DesktopState::placement(terminal, QSize(), 50, 10, 20, false, 0).isEmpty());
     }
 
+    void minimizedPlacementIsACompactUpperRightSquare()
+    {
+        const QRectF terminal(100, 200, 1200, 900);
+        QCOMPARE(DesktopState::minimizedPlacement(terminal, 120, 10, 20),
+                 QRectF(1252, 205, 28, 28));
+        // Device-pixel cell dimensions do not enlarge the logical-pixel tile.
+        QCOMPARE(DesktopState::minimizedPlacement(terminal, 120, 20, 40),
+                 QRectF(1252, 205, 28, 28));
+        // A short/fullscreen owner still uses its own top-right, not the output.
+        QCOMPARE(DesktopState::minimizedPlacement(QRectF(-1000, 20, 600, 300), 60, 10, 20),
+                 QRectF(-448, 25, 28, 28));
+        QCOMPARE(DesktopState::minimizedPlacement(QRectF(100.2, 200.2, 1200, 900), 120, 10, 22),
+                 QRectF(1252, 206, 28, 28));
+    }
+
+    void minimizedPlacementFitsSmallOwnersWithoutAFullRaster()
+    {
+        const QRectF tiny(10, 20, 16, 10);
+        const auto rect = DesktopState::minimizedPlacement(tiny, 2, 8, 16);
+        QCOMPARE(rect, QRectF(10, 20, 10, 10));
+        QVERIFY(tiny.contains(rect));
+        QVERIFY(DesktopState::minimizedPlacement({}, 120, 10, 20).isEmpty());
+        QVERIFY(DesktopState::minimizedPlacement(tiny, 0, 10, 20).isEmpty());
+        QVERIFY(DesktopState::minimizedPlacement(tiny, 2, 0, 20).isEmpty());
+    }
+
     void rotatedFractionalMonitorsUseLogicalCoordinates()
     {
         auto output = monitor();

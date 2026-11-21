@@ -50,6 +50,15 @@ test("manual notes restore by branch and new sessions do not inherit them", () =
   assert.equal(parseSaved({ ...saved, version: 2 }), undefined);
 });
 
+test("minimizing an existing branch preserves its checklist without hiding the note", () => {
+  const pinned = { version: 1, hidden: false, manual: { title: "Release", tasks: [{ text: "Check", done: true }] } };
+  const entry = (data: unknown) => ({ type: "custom", customType: ENTRY_TYPE, data });
+  const branch = [entry(pinned), entry({ ...pinned, minimized: true })];
+  assert.deepEqual(restore(branch).saved, { ...pinned, minimized: true });
+  assert.deepEqual(restore(branch.slice(0, 1)).saved, pinned);
+  assert.deepEqual(restore([...branch, entry({ ...pinned, minimized: false })]).saved, pinned);
+});
+
 test("batch completion retains identities even when the three displayed rows all change", () => {
   const phases = (status: string) => [{ name: "Ship", tasks: ["A", "B", "C", "D", "E", "F"]
     .map(content => ({ content, status })) }];

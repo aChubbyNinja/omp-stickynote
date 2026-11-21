@@ -11,6 +11,7 @@ import { cleanLabel, type Note } from "./state.ts";
 
 interface DesktopOptions {
   onReady: () => void;
+  onRestore: () => void;
   onError: (error: unknown) => void;
 }
 
@@ -21,6 +22,7 @@ interface DesktopFrame {
   cellHeightPx: number;
   centered: boolean;
   visible: boolean;
+  minimized: boolean;
 }
 
 interface RasterRequest {
@@ -63,7 +65,7 @@ function rendererPath(): string | undefined {
 function sameFrame(left: DesktopFrame | undefined, right: DesktopFrame): boolean {
   return left !== undefined && left.columns === right.columns && left.rows === right.rows &&
     left.cellWidthPx === right.cellWidthPx && left.cellHeightPx === right.cellHeightPx &&
-    left.centered === right.centered && left.visible === right.visible;
+    left.centered === right.centered && left.visible === right.visible && left.minimized === right.minimized;
 }
 
 function positive(value: number): number {
@@ -163,8 +165,17 @@ export class DesktopNote {
       cellHeightPx: positive(frame.cellHeightPx),
       centered: frame.centered,
       visible: frame.visible,
+      minimized: frame.minimized,
     };
     if (sameFrame(this.#frame, next)) return;
+    if (this.#frame?.minimized !== next.minimized) {
+      // A restored surface must wait for its current note, never reuse the
+      // pre-minimize PNG or accept an in-flight raster from that scene.
+      this.#scene++;
+      this.#desired = undefined;
+      this.#raster = undefined;
+      this.#sentRasterKey = undefined;
+    }
     this.#frame = next;
     this.#refresh();
   }
@@ -184,7 +195,7 @@ export class DesktopNote {
   #refresh(): void {
     const frame = this.#frame;
     if (!frame) return;
-    if (frame.visible) {
+    if (frame.visible && !frame.minimized) {
       const baseScale = Math.min(52, Math.max(1, frame.columns - 3)) * frame.cellWidthPx / 520;
       const height = Math.max(1, Math.floor(Math.max(1, frame.rows - COMPOSER_ROWS) * frame.cellHeightPx));
       const rowHeight = frame.cellHeightPx / baseScale;
@@ -207,7 +218,7 @@ export class DesktopNote {
   }
 
   #scheduleRaster(): void {
-    if (!this.ready || this.#running || this.#scheduled || !this.#frame?.visible ||
+    if (!this.ready || this.#running || this.#scheduled || !this.#frame?.visible || this.#frame.minimized ||
         !this.#desired || this.#raster?.key === this.#desired.key) return;
     this.#scheduled = true;
     queueMicrotask(() => {
@@ -218,7 +229,7 @@ export class DesktopNote {
 
   async #rasterize(): Promise<void> {
     const request = this.#desired;
-    if (!this.ready || this.#running || !this.#frame?.visible || !request || this.#raster?.key === request.key) return;
+    if (!this.ready || this.#running || !this.#frame?.visible || this.#frame.minimized || !request || this.#raster?.key === request.key) return;
     this.#running = true;
     try {
       // No terminal-cell padding or SIXEL conversion: the companion needs true alpha.
@@ -241,7 +252,7 @@ export class DesktopNote {
     const frame = this.#frame;
     if (!this.ready || !child || !frame || this.#blocked) return;
     const raster = this.#raster?.scene === this.#desired?.scene ? this.#raster : undefined;
-    const png = frame.visible && raster && raster.key !== this.#sentRasterKey ? raster.png : undefined;
+    const png = frame.visible && !frame.minimized && raster && raster.key !== this.#sentRasterKey ? raster.png : undefined;
     if (!png && sameFrame(this.#sentFrame, frame)) return;
     try {
       // A false return still accepts this frame. Keep only the latest state until
@@ -289,8 +300,24 @@ export class DesktopNote {
         this.#fail(new Error(`Desktop sticky note renderer: ${message.message}`));
         return;
       }
+      if (message.event === "restore" && this.#ready) {
+        // A click already queued by the helper must not reopen a hidden note.
+        if (this.#frame?.visible && this.#frame.minimized) {
+          try {
+            this.#options.onRestore();
+          } catch (error) {
+            this.#fail(error);
+          }
+        }
+        if (this.#disposed || this.#failed) return;
+        continue;
+      }
       if (message.event !== "ready" || this.#ready) {
         this.#fail(new Error("Desktop sticky note renderer sent an unexpected protocol event"));
+        return;
+      }
+      if (!("protocol" in message) || message.protocol !== 2) {
+        this.#fail(new Error("Desktop sticky note renderer lacks clickable minimize support; rebuild or upgrade the native helper"));
         return;
       }
       this.#ready = true;

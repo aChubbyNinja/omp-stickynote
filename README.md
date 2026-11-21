@@ -61,8 +61,9 @@ omp -e /absolute/path/to/omp-stickynote/src/index.ts
 - **Only as wide as needed.** Startup stays compact. Once centered, graphic cards widen only if the title would otherwise be truncated after two rows. Expansion is symmetric, capped at 33% of the original paper width per side (66% total), and limited by the terminal viewport. Titles still use at most two rows and an ellipsis; font sizes and task wrapping do not change. A shorter title restores the compact width. [See adaptive sizing](assets/adaptive-width.png).
 - **Pinned beyond scrollback.** Starts at the top-right and moves to the top-center as output scrolls. The desktop surface follows its owning terminal window, not the terminal's saved image rows. A new session resets the position.
 - **A real soft shadow.** The desktop companion alpha-composites the paper and blurred shadow without a blank rectangular mat. Text remains visible through the shadow and around the rounded corners.
-- **Input stays yours.** The desktop surface accepts neither pointer nor keyboard input: clicking, selecting text, and scrolling still reach the terminal underneath.
-- **Session-local.** Manual notes and visibility are stored in OMP's session entries and restored on resume or branch navigation. Separate sessions do not share mutable note state. OMP controls persistence: a fresh session with no assistant turn may still be memory-only, and `--no-session` never saves it.
+- **Minimize without losing your place.** Type `/sticky minimize` to leave a small yellow `+` square at the top-right of OMP. Click it (or type `/sticky show`) to reopen the current note. Edits and checkboxes keep updating while it is collapsed.
+- **Input stays yours.** The expanded desktop note lets clicks, selections, and scrolling pass through. Only the minimized square accepts a click; neither mode takes keyboard focus.
+- **Session-local.** The note and its minimized state follow the session branch on resume. Separate sessions do not share mutable note state. OMP controls persistence: a fresh session with no assistant turn may still be memory-only, and `--no-session` never saves it.
 - **No extra model calls or telemetry.** Ordinary notes and local effects do not use the network. Explicitly enabling office sharing sends encrypted LAN multicast snapshots and release waves; see [LAN office](#lan-office).
 
 ## Commands
@@ -81,7 +82,8 @@ omp -e /absolute/path/to/omp-stickynote/src/index.ts
 | `/sticky Title` | Pin a title with one empty checkbox. |
 | `/sticky done N` | Toggle checkbox 1, 2, or 3 on a manual note. |
 | `/sticky auto` | Return to the session title and live OMP todo list. |
-| `/sticky hide` / `/sticky show` | Hide or restore the note for this session. |
+| `/sticky minimize` | Collapse to a clickable square; unlike `/sticky hide`, this leaves office sharing unchanged. |
+| `/sticky hide` / `/sticky show` | Hide the note entirely or restore it at full size. |
 | `/sticky` | Show command help. |
 | `/sticky boring mode` / `/sticky fun on` | Turn local effects off or back on. The choice is saved with this session branch and does not change LAN sharing. |
 | `/sticky dnd` | Toggle a larger **DEEP WORK** fold-out sign. |
@@ -206,7 +208,8 @@ The live, read-only board lists **SELF** and **REMOTE** sessions with names, pro
 - The paper starts approximately 50 terminal columns wide, plus transparent shadow gutters. Long titles can widen the centered graphic card by up to 66%; task labels never trigger expansion. Graphics fit the actual available viewport, without an arbitrary 18-row height cap.
 - This is an overlay, not reserved layout space: the opaque paper covers output beneath it. `/sticky hide` reveals that output. The desktop card is not copied into terminal selections or scrollback; the original transcript remains intact.
 - Interactive TUI only. Print, JSON, RPC, and subagent sessions do not mount the note.
-- This release was tested with **Foot and OMP 18.22.2** on Hyprland. The terminal backend targets OMP **18.21.0**. Other OMP releases and native Tern rendering remain unverified. Office transport was tested with two loopback sessions, not two physical computers; the two-machine LAN setup above is not a claim of physical-network verification.
+- Click-to-restore was tested in **Foot with OMP 19.0.1**, on both the Hyprland desktop companion and terminal backend. The terminal backend targets the OMP **18.21.0** API and uses terminal mouse reporting while the tile is visible. If your terminal cannot forward clicks, or you use Tern’s native UI instead of the terminal renderer, use `/sticky show`.
+- Office transport was tested with two loopback sessions, not two physical computers.
 - Terminal-server instances sharing one PID, remote SSH sessions, and multiplexers may not have an unambiguous compositor-window ancestor; the companion reports this rather than attaching to the wrong session. Other compositors currently use terminal rendering.
 
 The [native scrollback screenshot](assets/scrollback.png) shows the same card staying fixed over older output.

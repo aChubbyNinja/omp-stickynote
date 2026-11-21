@@ -12,18 +12,24 @@
 #include <QTimer>
 #include <QVector>
 #include <memory>
+#include <functional>
 
 namespace LayerShellQt { class Window; }
 
 class RasterItem final : public QQuickItem {
 public:
-    explicit RasterItem(QQuickItem *parent);
+    RasterItem(QQuickItem *parent, std::function<void()> onClick);
     void setImage(const QImage &image);
 protected:
     QSGNode *updatePaintNode(QSGNode *old, UpdatePaintNodeData *) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseUngrabEvent() override;
 private:
     QImage m_image;
     bool m_dirty = true;
+    bool m_pressed = false;
+    std::function<void()> m_onClick;
 };
 
 class Overlay final : public QObject {
@@ -62,9 +68,10 @@ private:
     bool m_refreshPending = false, m_ready = false, m_failed = false;
     int m_snapshotAttempts = 0;
     bool m_stdinOpen = true, m_visible = false, m_centered = false;
+    bool m_minimized = false, m_surfaceMinimized = false, m_restoreRequested = false;
     int m_columns = 0, m_transparentTop = 0;
     double m_cellWidth = 0, m_cellHeight = 0;
-    QImage m_image;
+    QImage m_image, m_tile;
     std::unique_ptr<QQuickWindow> m_window;
     QPointer<QScreen> m_surfaceScreen;
     RasterItem *m_raster = nullptr;

@@ -106,3 +106,21 @@ QRectF DesktopState::placement(const QRectF &client, const QSize &image, int col
         : std::max(client.left(), client.right() - 2 * logicalCell - width);
     return {x, client.top() + topGap - transparentTop * scale, width, height};
 }
+
+QRectF DesktopState::minimizedPlacement(const QRectF &client, int columns, double cellWidth, double cellHeight)
+{
+    if (client.isEmpty() || columns <= 0 || cellWidth <= 0 || cellHeight <= 0)
+        return {};
+    // Integral logical-pixel bounds keep the input surface exactly coincident
+    // with the paper square, without a transparent, mouse-blocking fringe.
+    const QRectF aligned(QPointF(std::ceil(client.left()), std::ceil(client.top())),
+                         QPointF(std::floor(client.right()), std::floor(client.bottom())));
+    const double size = std::min({double(MinimizedTileSize), aligned.width(), aligned.height()});
+    if (size <= 0)
+        return {};
+    const double logicalCell = client.width() / columns;
+    const double topGap = std::min({client.height() / 4, cellHeight * logicalCell / cellWidth / 4,
+                                    aligned.height() - size});
+    return {std::max(aligned.left(), std::floor(aligned.right() - 2 * logicalCell - size)),
+            std::max(aligned.top(), std::floor(aligned.top() + topGap)), size, size};
+}
