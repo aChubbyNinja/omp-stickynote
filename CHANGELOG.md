@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.1 — 2026-11-21
 
 - Questions now turn the sticky note blue instead of replacing it with a reply icon. The paper stays pinned when it fits above the question; a compact blue note keeps smaller forms readable and interactive.
 
