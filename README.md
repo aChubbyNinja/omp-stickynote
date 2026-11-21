@@ -98,12 +98,12 @@ The `|` character separates fields; labels cannot contain it in slash commands. 
 
 New sessions start in fun mode. Resuming a branch restores its last explicit preference, including an opt-out saved in an earlier version. DND, crumple, and office sharing remain separate actions.
 
-1. **Victory moment.** Completing the remaining tasks under the same title shows **SHIPPED** and confetti for 3.6 seconds. Automatic notes follow the whole OMP checklist, even when more than three tasks finish together; only three rows are displayed. This celebrates checkboxes, not a software release.
+1. **Confetti.** Finishing a normal OMP reply shows **TURN DONE** with confetti for 3.6 seconds, even with no checklist. Finishing the last real checkbox shows **SHIPPED** instead; a reply that already celebrated its checklist doesn't celebrate twice. Automatic notes follow the entire checklist across session renames, even though only three rows are visible. Neither celebration means software was published.
 2. **Curled paper and flutter.** A curled corner and brief flutter give real title/task changes and activity transitions a paper-like response.
 3. **Handwritten checks.** Completed checkboxes use varied ink strokes, briefly drawing newly completed marks.
 4. **Crumple and restore.** Dismiss the paper into a small crumpled ball, then restore the unchanged note with `/sticky show`. This works without fun mode.
 5. **Attention badges.** **READY**, **WORKING**, **YOUR TURN**, and **FINISHED** follow main-session activity, questions/approval requests, and completion. The waiting pulse is brief, not an endless animation.
-6. **Construction crew.** Watch for little hard hats when OMP writes or edits a file, or runs a recognized build or test. Workers linger after quick edits; only a build or test result earns **PASS** or **FAIL**.
+6. **Construction crew.** Two hard-hat workers appear on the expanded paper while OMP works, even during research or a plain answer. File edits, recognized builds and tests have their own props. A passing result is never inferred just from seeing the workers.
 7. **Milestone stamps.** **FIRST COMMIT**, **TESTS PASSED**, and **RELEASED** respond to supported command results, not words in a title or prompt.
 8. **Do-not-disturb sign.** A larger fold-out **DEEP WORK** or **WAITING ON A BUILD** sign keeps the original note intact and suppresses fun effects until DND is off.
 9. **LAN office board.** Explicitly share project titles, up to three tasks/check states, and attention status with a trusted group. `/sticky office board` opens a live, read-only dashboard.
@@ -112,6 +112,8 @@ New sessions start in fun mode. Resuming a branch restores its last explicit pre
 ![OMP Sticky paper effects in three states](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/paper-effects.png)
 
 ### Fast local demo
+
+For the quickest check, leave the note expanded and ask OMP an ordinary question. Look for the workers while it answers and **TURN DONE** confetti when it finishes. No special prompt, tools, or LAN setup needed. If you opted out earlier, use `/sticky fun on`; if you see a DND sign, use `/sticky dnd off`. A minimized note stays a quiet square.
 
 Enter these commands in an interactive OMP session, pausing after each checkbox to see the effect:
 
@@ -133,7 +135,7 @@ Use `/sticky boring mode` to disable local effects, or `/sticky auto` to follow 
 
 ### What activity signals mean
 
-Project effects follow actual title/task changes. The crew watches main-session file writes and edits as well as recognized foreground build/test commands. Writing files doesn't imply that tests passed. Shell milestones require a matched tool result. The note does not watch other terminals, arbitrary scripts, CI, subagents, or background jobs.
+The general crew follows the main session's working state, including while it waits for delegated work. Specialized tools, props and stamps depend on recognized main-session operations. Writing files doesn't imply that tests passed. Shell milestones require a matched tool result. The note does not infer outcomes from other terminals, arbitrary scripts, CI, subagent internals or background job launches.
 
 Recognized commands include `npm test`, `npm run build` and equivalent pnpm/yarn/bun commands; Cargo and Go test/build commands; `node --test`, pytest, Jest, and `vitest run`. A literal chain such as `cd app && npm run check && npm test` can earn **TESTS PASSED** when the entire command succeeds. Pipes, arbitrary wrappers and shell expansions are not treated as proof. Help, dry-run, watch, listing, and other non-execution modes are excluded.
 

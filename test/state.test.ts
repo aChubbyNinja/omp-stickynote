@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanLabel, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, tasksFromPhases, todoSnapshot } from "../src/state.ts";
+import { cleanLabel, customTodoUpdates, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, tasksFromPhases, todoSnapshot } from "../src/state.ts";
+import { Effects } from "../src/effects.ts";
 
 test("labels cannot inject colors, cursor motion, or terminal hyperlinks", () => {
   assert.equal(cleanLabel("\x1b[31mBuild\x1b[0m\n\x1b]8;;https://example.com\x07app\x1b]8;;\x07\u202e"), "Build app");
@@ -128,4 +129,64 @@ test("a skipped replacement init cannot turn identical labels from unrelated wor
   assert.notEqual(before.tasks[0].id, after.tasks[0].id);
   assert.equal(after.todo?.generation, "second-plan");
   assert.equal(restore([first, result("init", "pending", "failed-init", true), done]).todo?.generation, "first-plan");
+});
+
+const evalTodo = (id: string, status: string) => ({
+  type: "custom", customType: "user_todo_edit", id,
+  data: { phases: [{ name: "Tasks", tasks: ["A", "B", "C", "D", "E", "F"]
+    .map(content => ({ content, status })) }] },
+});
+
+test("eval initialization and completion between polls still produce visible victory for the full list", t => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const effects = new Effects(() => {}, () => {});
+  t.after(() => effects.dispose());
+  effects.fun(true);
+  effects.note({ title: "Ship", tasks: [], progress: [] }, true);
+  const branch = [{ id: "observed-leaf", type: "custom", customType: "unrelated" },
+    evalTodo("eval-init", "in_progress"), evalTodo("eval-done", "completed")];
+  const updates = customTodoUpdates(branch, "observed-leaf")!;
+  assert.equal(updates.length, 2);
+  for (const update of updates) {
+    effects.note({ title: "Ship", tasks: projectTasks(update.tasks), progress: update.tasks });
+  }
+  assert.equal(effects.frame.motion, "victory");
+  assert.deepEqual(projectTasks(updates[0].tasks).map(task => task.text), ["A", "B", "C"]);
+  assert.deepEqual(projectTasks(updates[1].tasks).map(task => task.text), ["D", "E", "F"]);
+  t.mock.timers.tick(120);
+  assert.deepEqual(customTodoUpdates(branch, "eval-done"), []);
+  assert.equal(effects.frame.step, 1, "the next unchanged poll does not restart the celebration");
+});
+
+test("custom snapshot catch-up excludes loaded branches, navigation, and edits superseded by live direct results", () => {
+  const init = evalTodo("eval-init", "in_progress");
+  const done = evalTodo("eval-done", "completed");
+  const direct = {
+    id: "direct-result", type: "message", message: {
+      role: "toolResult", toolName: "todo", toolCallId: "live-direct",
+      details: { op: "init", phases: init.data.phases, storage: "session" },
+    },
+  };
+  assert.equal(customTodoUpdates([init, done], undefined), undefined, "session loading is a baseline");
+  assert.equal(customTodoUpdates([init, done], "sibling-leaf"), undefined, "branch navigation is a baseline");
+  assert.deepEqual(customTodoUpdates([init, done, direct], "eval-init"), [],
+    "the direct message_end has already observed and superseded earlier custom edits");
+  const afterDirect = customTodoUpdates([init, done, direct, evalTodo("new-done", "completed")], "eval-init")!;
+  assert.equal(afterDirect.length, 1);
+  assert.equal(afterDirect[0].generation, "live-direct");
+  assert.equal(afterDirect[0].source, "new-done");
+});
+
+test("catching up custom completions in boring mode never queues a victory for later", t => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const effects = new Effects(() => {}, () => {});
+  t.after(() => effects.dispose());
+  effects.note({ title: "Ship", tasks: [], progress: [] }, true);
+  for (const update of customTodoUpdates([
+    evalTodo("eval-init", "in_progress"), evalTodo("eval-done", "completed"),
+  ], null)!) {
+    effects.note({ title: "Ship", tasks: projectTasks(update.tasks), progress: update.tasks });
+  }
+  effects.fun(true);
+  assert.equal(effects.frame.motion, undefined);
 });

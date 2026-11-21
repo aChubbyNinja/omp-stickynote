@@ -3,10 +3,10 @@ import type { Note } from "./state.ts";
 export interface VisualFrame {
   fun: boolean;
   attention: "idle" | "working" | "waiting" | "finished";
-  crew: "none" | "editing" | "build" | "test" | "pass" | "fail";
+  crew: "none" | "working" | "editing" | "build" | "test" | "pass" | "fail";
   stamp?: "FIRST COMMIT" | "TESTS PASSED" | "RELEASED";
   dnd?: "DEEP WORK" | "WAITING ON A BUILD";
-  motion?: "victory" | "flutter" | "crumple" | "wave" | "check" | "pulse";
+  motion?: "victory" | "turnDone" | "flutter" | "crumple" | "wave" | "check" | "pulse";
   step: number;
   checks: readonly number[];
 }
@@ -18,6 +18,7 @@ const MOTIONS: Record<Motion, { priority: number; steps: number }> = {
   check: { priority: 1, steps: 6 },
   flutter: { priority: 2, steps: 6 },
   wave: { priority: 3, steps: 6 },
+  turnDone: { priority: 3, steps: 6 },
   victory: { priority: 4, steps: 6 },
   crumple: { priority: 5, steps: 6 },
 };
@@ -39,6 +40,7 @@ export class Effects {
   #motion: VisualFrame["motion"];
   #step = 0;
   #checks: readonly number[] = EMPTY_CHECKS;
+  #wonThisTurn = false;
   #previous?: Note;
   #animation?: NodeJS.Timeout;
   #victoryTimer?: NodeJS.Timeout;
@@ -56,7 +58,7 @@ export class Effects {
     return this.#frame ??= {
       fun: this.#fun,
       attention: active ? this.#attention : "idle",
-      crew: active ? this.#crew : "none",
+      crew: active ? this.#visibleCrew : "none",
       stamp: active ? this.#stamp : undefined,
       dnd: this.#dnd,
       motion: this.#motion,
@@ -67,6 +69,11 @@ export class Effects {
 
   get #active(): boolean {
     return this.#fun && !this.#dnd && !this.#disposed;
+  }
+
+  get #visibleCrew(): VisualFrame["crew"] {
+    if (this.#crew !== "none") return this.#crew;
+    return this.#attention === "working" || this.#motion === "turnDone" ? "working" : "none";
   }
 
   fun(on: boolean): void {
@@ -109,7 +116,7 @@ export class Effects {
     const sameTitle = previous.title === note.title;
     const used = new Set<number>();
     const checks: number[] = [];
-    if (sameTitle) {
+    if (sameTitle || (oldProgress && progress)) {
       for (let i = 0; i < note.tasks.length; i++) {
         const task = note.tasks[i];
         if (!task.done) continue;
@@ -126,7 +133,7 @@ export class Effects {
       }
     }
     let finished = false;
-    if (sameTitle && oldProgress && progress) {
+    if (oldProgress && progress) {
       // The final three checked rows need not include any of the previously visible open rows.
       if (oldProgress.some(t => !t.done) && progress.length && progress.every(t => t.done)) {
         const completed = new Set(progress.map(t => t.id));
@@ -137,23 +144,31 @@ export class Effects {
         note.tasks.every(task => task.done) && previous.tasks.every((task, index) => task.done || used.has(index));
     }
     if (!changed && !finished) return;
-    if (this.#motion !== "crumple" && (!sameTitle || (this.#motion === "victory" && !finished))) {
+    // A generated title is not new work: keep the current confetti.
+    if ((this.#motion === "victory" || this.#motion === "turnDone") &&
+      oldProgress && progress && !progressChanged) return;
+    if (this.#motion !== "crumple" && (!sameTitle || this.#motion === "turnDone" || (this.#motion === "victory" && !finished))) {
       this.#stopMotion();
     }
     if (this.#motion !== "crumple" && checks.length) this.#checks = Object.freeze(checks);
-    if (finished) this.#startMotion("victory");
-    else if (checks.length) this.#startMotion("check");
+    if (finished) {
+      if (this.#attention === "working" || this.#attention === "waiting") this.#wonThisTurn = true;
+      this.#startMotion("victory");
+    } else if (checks.length) this.#startMotion("check");
     else this.#startMotion("flutter");
     this.#notify();
   }
 
   attention(value: VisualFrame["attention"]): void {
     if (this.#disposed || this.#attention === value) return;
+    const wasWorking = this.#attention === "working";
     this.#attention = value;
     if (!this.#active) return;
-    if (this.#motion === "pulse" || this.#motion === "flutter") this.#stopMotion();
+    if (this.#motion === "pulse" || this.#motion === "flutter" || this.#motion === "turnDone") this.#stopMotion();
     if (value === "working") this.#startMotion("flutter");
     else if (value === "waiting") this.#startMotion("pulse");
+    else if (value === "finished" && wasWorking && !this.#wonThisTurn) this.#startMotion("turnDone");
+    if (value === "finished" || value === "idle") this.#wonThisTurn = false;
     this.#notify();
   }
 
@@ -223,7 +238,7 @@ export class Effects {
     const active = this.#active;
     if (frame && frame.fun === this.#fun && frame.dnd === this.#dnd &&
       frame.attention === (active ? this.#attention : "idle") &&
-      frame.crew === (active ? this.#crew : "none") &&
+      frame.crew === (active ? this.#visibleCrew : "none") &&
       frame.stamp === (active ? this.#stamp : undefined) &&
       frame.motion === this.#motion && frame.step === this.#step &&
       frame.checks.length === this.#checks.length &&
@@ -234,6 +249,7 @@ export class Effects {
   }
 
   #quiet(): void {
+    this.#wonThisTurn = false;
     if (this.#crewTimer) this.#crew = "none";
     clearTimeout(this.#crewTimer);
     clearTimeout(this.#stampTimer);
@@ -261,9 +277,10 @@ export class Effects {
     this.#motion = motion;
     this.#step = 0;
     if (motion === "crumple") this.#checks = EMPTY_CHECKS;
+    const confetti = motion === "victory" || motion === "turnDone";
     this.#animation = setInterval(() => {
       if (this.#step + 1 >= MOTIONS[motion].steps) {
-        if (motion === "victory") {
+        if (confetti) {
           clearInterval(this.#animation);
           this.#animation = undefined;
           return; // Hold the last painted frame without scheduling more repaints.
@@ -277,7 +294,7 @@ export class Effects {
       }
     }, FRAME_MS);
     this.#animation.unref?.();
-    if (motion === "victory") {
+    if (confetti) {
       this.#victoryTimer = setTimeout(() => {
         this.#stopMotion();
         this.#notify();

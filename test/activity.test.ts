@@ -182,6 +182,111 @@ test("tool_result and tool_execution_end are idempotent, matched by tool and id"
   assert.deepEqual(h.milestones, ["TESTS PASSED"]);
 });
 
+test("eval public tool wrappers confirm work through tool_call and tool_result alone", () => {
+  for (const [toolName, input, expected, milestone] of [
+    ["bash", { command: "npm test" }, ["test", "pass"], "TESTS PASSED"],
+    ["bash", { command: "npm run build" }, ["build", "pass"], undefined],
+    ["edit", { input: "[src/example.ts#ABCD]\nPUT 1.=1:\n+new\n" }, ["editing", "none"], undefined],
+    ["write", { path: "src/example.ts", content: "" }, ["editing", "none"], undefined],
+  ] as const) {
+    const h = harness();
+    h.event("tool_call", { toolCallId: "bridge", toolName, input });
+    assert.deepEqual(h.crew, []); // Preflight is not proof that execution began.
+    const result = { toolCallId: "bridge", toolName, input, details: {}, content: [], isError: false };
+    h.event("tool_result", result);
+    h.event("tool_result", result);
+    h.event("tool_execution_start", { toolCallId: "bridge", toolName, args: input });
+    h.end("bridge", {}, false, toolName);
+    assert.deepEqual(h.crew, expected);
+    assert.deepEqual(h.milestones, milestone ? [milestone] : []);
+  }
+});
+
+test("callback reset cancels a registered-only completion before its milestone", () => {
+  const h = harness();
+  h.onCrew(value => { if (value === "pass") h.reset(); });
+  h.event("tool_call", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" } });
+  h.event("tool_result", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false });
+  assert.deepEqual(h.milestones, []);
+});
+
+test("registered results recognize the executed input, not a preflight promise", () => {
+  for (const [before, after, isError, details, expected] of [
+    ["npm test", "echo skipped", false, {}, []],
+    ["echo placeholder", "npm test", false, {}, ["TESTS PASSED"]],
+    ["npm test", "npm test", true, {}, []],
+    ["npm test", "npm test", false, undefined, []],
+    ["npm test", "npm test", false, { async: { state: "running" } }, []],
+  ] as const) {
+    const h = harness();
+    h.event("tool_call", { toolCallId: "bridge", toolName: "bash", input: { command: before } });
+    h.event("tool_result", { toolCallId: "bridge", toolName: "bash", input: { command: after }, details, content: [], isError });
+    assert.deepEqual(h.milestones, expected);
+  }
+});
+
+test("preflight and lifecycle delivery settle once in either result order", () => {
+  for (const executionEndFirst of [true, false]) {
+    const h = harness();
+    h.event("tool_call", { toolCallId: "shell", toolName: "bash", input: { command: "npm test" } });
+    h.start("npm test");
+    const result = { toolCallId: "shell", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false };
+    for (const delivery of executionEndFirst ? ["execution", "registered"] : ["registered", "execution"]) {
+      if (delivery === "execution") h.end();
+      else h.event("tool_result", result);
+    }
+    assert.deepEqual(h.crew, ["test", "pass"]);
+    assert.deepEqual(h.milestones, ["TESTS PASSED"]);
+  }
+});
+
+test("registered fallback rejects mismatched, reset, disabled and terminally stale results", () => {
+  for (const invalidate of ["reset", "disabled", "aborted", "finished"]) {
+    const h = harness();
+    h.event("tool_call", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" } });
+    h.event("tool_result", { toolCallId: "bridge", toolName: "write", input: { path: "src/example.ts" }, details: {}, content: [], isError: false });
+    assert.deepEqual(h.crew, []);
+    if (invalidate === "reset") h.reset();
+    else if (invalidate === "disabled") {
+      h.enable(false);
+      h.event("agent_start");
+      h.enable(true);
+    } else {
+      h.event("agent_end", { messages: [{ role: "assistant", stopReason: invalidate === "aborted" ? "aborted" : "stop" }] });
+    }
+    const beforeStaleResult = [...h.crew]; // abort itself can clear the crew
+    h.event("tool_result", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false });
+    assert.deepEqual(h.crew, beforeStaleResult);
+    assert.deepEqual(h.milestones, []);
+  }
+});
+
+test("denied preflights neither hold a turn open nor accumulate unbounded fallback matches", () => {
+  const h = harness();
+  h.event("agent_start");
+  for (let i = 0; i <= 512; i++) {
+    h.event("tool_call", { toolCallId: `denied-${i}`, toolName: "bash", input: { command: "npm test" } });
+  }
+  h.event("tool_result", { toolCallId: "denied-0", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false });
+  assert.deepEqual(h.milestones, []);
+  assert.deepEqual(h.crew, []);
+  h.event("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+  assert.equal(h.attention.at(-1), "finished");
+  h.event("tool_result", { toolCallId: "denied-512", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false });
+  assert.deepEqual(h.milestones, []);
+});
+
+test("subagent registered events cannot overwrite or consume a main public-tool match", () => {
+  const h = harness();
+  const child = { ...h.ctx, agent: { kind: "subagent" } } as unknown as ExtensionContext;
+  h.event("tool_call", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" } });
+  h.event("tool_call", { toolCallId: "bridge", toolName: "write", input: { path: "src/example.ts" } }, child);
+  h.event("tool_result", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false }, child);
+  assert.deepEqual(h.crew, []);
+  h.event("tool_result", { toolCallId: "bridge", toolName: "bash", input: { command: "npm test" }, details: {}, content: [], isError: false });
+  assert.deepEqual(h.milestones, ["TESTS PASSED"]);
+});
+
 test("reset, disable and callback cancellation invalidate deferred results", () => {
   const h = harness();
   h.start("npm publish"); h.reset(); h.end();

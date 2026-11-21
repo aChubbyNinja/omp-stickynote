@@ -130,6 +130,36 @@ export function todoSnapshot(entry: unknown, generation?: string): TodoSnapshot 
   return { tasks, source, generation, reset };
 }
 
+/** Replay only newly appended eval/manual snapshots, never durable direct results. */
+export function customTodoUpdates(
+  entries: readonly unknown[], afterLeaf: string | null | undefined, generation?: string,
+): TodoSnapshot[] | undefined {
+  if (afterLeaf === undefined) return;
+  let start = 0;
+  if (afterLeaf !== null) {
+    start = entries.length;
+    while (start > 0) {
+      const entry = entries[--start];
+      if (record(entry) && entry.id === afterLeaf) break;
+    }
+    const entry = entries[start];
+    if (!record(entry) || entry.id !== afterLeaf) return;
+    start++;
+  }
+  const updates: TodoSnapshot[] = [];
+  for (let i = start; i < entries.length; i++) {
+    const entry = entries[i];
+    const snapshot = todoSnapshot(entry, generation);
+    if (!snapshot) continue;
+    generation = snapshot.generation;
+    // message_end already consumed direct results, including any earlier custom
+    // edits. Replaying those edits would rewind the effect's live baseline.
+    if (record(entry) && entry.type === "message") updates.length = 0;
+    else updates.push(snapshot);
+  }
+  return updates;
+}
+
 /** Read only the current branch: never borrow tasks from a sibling session. */
 export function restore(entries: readonly unknown[]): { saved: SavedNote; tasks: Task[]; todo?: TodoSnapshot } {
   let saved: SavedNote | undefined;

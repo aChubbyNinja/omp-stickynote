@@ -144,6 +144,46 @@ test("finishing a whole automatic checklist celebrates even if all three visible
   assert.notEqual(effects.frame.motion, "victory", "dropping an unfinished item is not completion");
 });
 
+test("ordinary work shows hard hats; a clean reply celebrates the turn, not an unfinished checklist", t => {
+  const { effects } = harness(t);
+  effects.fun(true);
+  effects.note(unfinished, true);
+  effects.attention("working");
+  t.mock.timers.tick(1000);
+  assert.equal(effects.frame.crew, "working", "reading/thinking needs no edit or shell command");
+  effects.attention("waiting");
+  assert.equal(effects.frame.crew, "none");
+  effects.attention("working");
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, "turnDone");
+  assert.equal(effects.frame.stamp, undefined);
+  assert.deepEqual(effects.frame.checks, []);
+  t.mock.timers.tick(4000);
+  assert.equal(effects.frame.motion, undefined);
+  assert.equal(effects.frame.crew, "none");
+  effects.attention("working");
+  effects.attention("idle");
+  assert.equal(effects.frame.motion, undefined, "errors and cancellations return to idle without confetti");
+});
+
+test("a delayed session title neither loses nor repeats a real checklist victory", t => {
+  const { effects } = harness(t);
+  const open = [{ id: "generation/a", text: "Inspect", done: false }];
+  const done = [{ ...open[0], done: true }];
+  effects.fun(true);
+  effects.note({ title: "Ready to begin", tasks: open, progress: open }, true);
+  effects.attention("working");
+  effects.note({ title: "New headline", tasks: done, progress: done });
+  assert.equal(effects.frame.motion, "victory");
+  t.mock.timers.tick(120);
+  effects.note({ title: "Final headline", tasks: done, progress: done });
+  assert.equal(effects.frame.motion, "victory");
+  assert.equal(effects.frame.step, 1);
+  t.mock.timers.tick(4000);
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, undefined, "do not play a second celebration at the end of the same turn");
+});
+
 test("fast edits leave visible workers, not a test result; quiet mode cancels them", t => {
   const { effects } = harness(t);
   effects.fun(true);

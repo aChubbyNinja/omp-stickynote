@@ -194,6 +194,8 @@ function released(signal: Signal, result: unknown): boolean {
 /** Observe live main-session events only; reset silently invalidates all in-flight calls. */
 export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { reset(): void } {
   const calls = new Map<string, Call>();
+  const registeredCalls = new Map<string, string>();
+  const unmirroredResults = new Set<string>();
   const approvals = new Set<string>();
   let generation = 0;
   let order = 0;
@@ -207,6 +209,8 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
   function reset(): void {
     generation++;
     calls.clear();
+    registeredCalls.clear();
+    unmirroredResults.clear();
     approvals.clear();
     running = failed = crewFailed = committed = false;
     lastAttention = lastCrew = undefined;
@@ -258,6 +262,7 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     if (!call || call.tool !== tool) return;
     const token = generation;
     calls.delete(id);
+    registeredCalls.delete(id);
     approvals.delete(id);
     const outerDetails = record(record(result)?.details);
     const dispatch = record(outerDetails?.xdev);
@@ -306,18 +311,42 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     running = true;
     busy(ctx, generation);
   });
+  // Eval's public tool bridge executes registered wrappers directly: it emits
+  // tool_call/tool_result, but no tool_execution_* lifecycle. A preflight can
+  // still be denied, so remember it without claiming execution or pending work.
+  pi.on("tool_call", (event, ctx) => {
+    if (!guard(ctx) || unmirroredResults.has(event.toolCallId)) return;
+    // Denied preflights need not produce a result. Bound their retention and
+    // clear them on terminal settle/reset; eviction only loses a possible cue.
+    if (registeredCalls.size >= 512) registeredCalls.delete(registeredCalls.keys().next().value!);
+    registeredCalls.set(event.toolCallId, event.toolName);
+  });
   pi.on("tool_execution_start", (event, ctx) => {
-    if (!guard(ctx)) return;
+    if (!guard(ctx) || unmirroredResults.has(event.toolCallId)) return;
     const token = generation;
     const activity = activityFor(event.toolName, event.args);
+    registeredCalls.delete(event.toolCallId);
     calls.set(event.toolCallId, { tool: event.toolName, ...activity, order: ++order });
     if (activity.crew) crew(ctx, token, activity.crew);
     busy(ctx, token);
   });
   pi.on("tool_execution_end", (event, ctx) => finish(ctx, event.toolCallId, event.toolName, event.result, event.isError));
-  // tool_result precedes tool_execution_end in some hosts; consuming the tracked
-  // call once makes the two notifications idempotent and rejects stale results.
-  pi.on("tool_result", (event, ctx) => finish(ctx, event.toolCallId, event.toolName, { details: event.details, content: event.content }, event.isError));
+  // Match either delivery path once. The result's input is the executed input,
+  // including revisions made by other extensions after the preflight event.
+  pi.on("tool_result", (event, ctx) => {
+    if (!guard(ctx)) return;
+    if (!calls.has(event.toolCallId) && registeredCalls.get(event.toolCallId) === event.toolName) {
+      const token = generation;
+      // Registered results can race the lifecycle mirror. Retain a bounded
+      // completion marker so a delayed start/end cannot replay the same cue.
+      if (unmirroredResults.size >= 512) unmirroredResults.delete(unmirroredResults.values().next().value!);
+      unmirroredResults.add(event.toolCallId);
+      const activity = activityFor(event.toolName, event.input);
+      calls.set(event.toolCallId, { tool: event.toolName, ...activity, order: ++order });
+      if (activity.crew) crew(ctx, token, activity.crew);
+    }
+    finish(ctx, event.toolCallId, event.toolName, { details: event.details, content: event.content }, event.isError);
+  });
   pi.on("tool_approval_requested", (event, ctx) => {
     if (!guard(ctx)) return;
     approvals.add(event.toolCallId);
@@ -340,6 +369,7 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     const terminal = event.messages.at(-1);
     if (!event.willContinue && !event.awaitingAsyncWork && terminal?.role === "assistant" && (terminal.stopReason === "error" || terminal.stopReason === "aborted")) {
       calls.clear();
+      registeredCalls.clear();
       approvals.clear();
       running = false;
       crewFailed = false;
@@ -351,6 +381,7 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     if (waiting()) { attention(ctx, token, "waiting"); return; }
     if (event.willContinue || event.awaitingAsyncWork || calls.size > 0 || pending(ctx)) { attention(ctx, token, "working"); return; }
     running = false;
+    registeredCalls.clear();
     const last = event.messages.at(-1);
     attention(ctx, token, !failed && last?.role === "assistant" && last.stopReason === "stop" ? "finished" : "idle");
   });

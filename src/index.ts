@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getCellDimensions, TERMINAL, type Component, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
 import { StickyNote } from "./note.ts";
 import { MinimizedNote } from "./minimized.ts";
-import { cleanLabel, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, todoSnapshot, type SavedNote, type Task } from "./state.ts";
+import { cleanLabel, customTodoUpdates, ENTRY_TYPE, parseSaved, projectTasks, restore, sessionTitle, todoSnapshot, type SavedNote, type Task } from "./state.ts";
 import { DesktopNote } from "./desktop.ts";
 import { headlineLayout, PAPER_WIDTH } from "./paper.ts";
 import { Effects, type VisualFrame } from "./effects.ts";
@@ -317,12 +317,21 @@ export default function stickynote(pi: ExtensionAPI): void {
     if (force || leaf !== lastLeaf) {
       const branch = ctx.sessionManager.getBranch();
       const restored = restore(branch);
-      ({ saved, tasks } = restored);
+      const updates = force ? undefined : customTodoUpdates(branch, lastLeaf, todoGeneration);
+      baseline ||= updates === undefined || (!!restored.todo?.reset && restored.todo.source !== todoSource);
+      saved = restored.saved;
+      fx?.fun(restoredFun(branch));
+      if (!baseline && !saved.manual && updates) {
+        // Eval commits can initialize and finish a list between timer ticks.
+        // Observe each new canonical edit before projecting the final card.
+        for (const snapshot of updates) {
+          fx?.note({ title: nextTitle, tasks: projectTasks(snapshot.tasks), progress: snapshot.tasks });
+        }
+      }
+      tasks = restored.tasks;
       taskRows = projectTasks(tasks);
-      baseline ||= !!restored.todo?.reset && restored.todo.source !== todoSource;
       todoSource = restored.todo?.source;
       todoGeneration = restored.todo?.generation;
-      fx?.fun(restoredFun(branch));
       lastLeaf = leaf;
     }
     lastTitle = nextTitle;
@@ -331,13 +340,13 @@ export default function stickynote(pi: ExtensionAPI): void {
     contentChanged(baseline);
   }
 
-  function save(ctx: ExtensionContext): void {
+  function save(ctx: ExtensionContext, baseline = false): void {
     if (!active(ctx)) return;
     pi.appendEntry(ENTRY_TYPE, saved);
     lastLeaf = ctx.sessionManager.getLeafId();
     if (!visible()) unmount();
     else mount();
-    contentChanged();
+    contentChanged(baseline);
   }
 
   function stop(): void {
@@ -574,7 +583,7 @@ export default function stickynote(pi: ExtensionAPI): void {
         saved = { ...saved, hidden: false, manual: { title: heading, tasks: (items.length ? items : [""]).map(text => ({ text, done: false })) } };
         if (crumpled || crumpling) restoreCard();
       }
-      save(ctx);
+      save(ctx, input === "auto");
       if (input === "hide" && wasSharing) ctx.ui.notify("Sticky note hidden; office sharing is off.", "info");
     },
   });

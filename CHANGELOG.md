@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1 — 2026-11-21
+
+- The construction crew is visible during ordinary OMP work, including research and tool-free replies. Finishing a successful turn shows **TURN DONE** confetti; only a completed checklist earns **SHIPPED**. Failed or interrupted turns do not celebrate.
+- Automatic checklist victories follow task identity across session renames. Boring mode, DND, and the minimized tile stay quiet.
+
 ## 1.6.0 — 2026-11-21
 
 - Double-click the expanded paper to minimize it to the existing top-right square; single-click the square to reopen it. This uses the same branch-local state as `/sticky minimize` and leaves the title and tasks intact.

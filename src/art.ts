@@ -22,11 +22,11 @@ export function effectLabels(fx?: VisualFrame): readonly string[] {
   if (fx.dnd) labels.push(`DO NOT DISTURB — ${fx.dnd}`);
   if (fx.motion === "crumple") labels.push("Paper crumpled — a fresh start");
   if (!fx.fun || fx.dnd) return labels;
-  if (fx.motion === "victory") {
+  if (fx.motion === "victory" || fx.motion === "turnDone") {
     const sparks = ["* . +", ". + *", "+ * ."];
-    labels.push(`SHIPPED!  ${sparks[fx.step % 3]}  ${sparks[(fx.step + 1) % 3]}`);
+    labels.push(`${fx.motion === "victory" ? "SHIPPED!" : "TURN DONE!"}  ${sparks[fx.step % 3]}  ${sparks[(fx.step + 1) % 3]}`);
   }
-  if (fx.crew !== "none") labels.push(({ editing: "Construction crew: editing", build: "Construction crew: building", test: "Construction crew: testing", pass: "Construction crew: passed", fail: "Construction crew: failed" })[fx.crew]);
+  if (fx.crew !== "none") labels.push(`👷 Construction crew: ${({ working: "on the job", editing: "editing", build: "building", test: "testing", pass: "passed", fail: "failed" })[fx.crew]}`);
   if (fx.stamp) labels.push(fx.stamp);
   labels.push(({ idle: "Ready", working: "Working", waiting: "Needs your attention", finished: "Finished" })[fx.attention]);
   if (fx.motion === "wave") labels.push("Office wave received");
@@ -71,7 +71,9 @@ function crewArt(fx: VisualFrame, width: number, height: number, step: number): 
       ? `<path d="M${x + 5} ${y - 30} v12 l-10 17 h29 l-10 -17 v-12" fill="#c6e0cc" stroke="#436651" stroke-width="2"/><path d="M${x} ${y - 7} h19" stroke="#548968" stroke-width="4"/><circle cx="${x + 9}" cy="${y - 14 - step * 2}" r="2" fill="#548968"/>`
       : fx.crew === "editing"
         ? `<g transform="translate(${x - 14} ${y - 32})"><rect width="48" height="32" rx="3" fill="#faedbe" stroke="#655139" stroke-width="2"/><path d="m14 8 -7 7 7 7 m19 -14 7 7 -7 7 m-7 -17 -6 20" stroke="#397754" stroke-width="3" fill="none"/></g>`
-        : lettering(fx.crew === "pass" ? "PASS" : "FAIL", x + 9, y - 9, 15, color, 'text-anchor="middle"');
+        : fx.crew === "working"
+          ? `<g transform="translate(${x - 9} ${y - 28})"><path d="M0 0 h39 v27 H0 Z" fill="#d6e5dc" stroke="#506b65" stroke-width="2"/><path d="M6 6 h12 v13 h13 M24 6 h9 v7" fill="none" stroke="#507270" stroke-width="2"/></g>`
+          : lettering(fx.crew === "pass" ? "PASS" : "FAIL", x + 9, y - 9, 15, color, 'text-anchor="middle"');
   return `<g>${beam}${worker(x - 59, y - 2, step, color, fx.crew === "build" || fx.crew === "editing" ? "hammer" : "clipboard")}${scene}${worker(x + 71, y - 2, (step + 2) % 6, color, fx.crew === "pass" || fx.crew === "fail" ? "flag" : "clipboard")}</g>`;
 }
 
@@ -131,14 +133,15 @@ export function paperArt(fx: VisualFrame | undefined, width: number, height: num
         ornaments += `<g fill="none" stroke="#6c9b85" stroke-width="2" opacity="${(6 - step) / 8}"><circle cx="${width - 98}" cy="${height - 25}" r="${radius}"/><circle cx="${width - 98}" cy="${height - 25}" r="${radius + 10}"/></g>`;
       }
     }
-    if (fx.motion === "victory") {
+    if (fx.motion === "victory" || fx.motion === "turnDone") {
       const colors = ["#be5946", "#4d8b75", "#bd8a24", "#7074a1"];
       for (let i = 0; i < 24; i++) {
         const x = 15 + ((i * 79 + step * (i % 2 ? 9 : -7) + width) % (width - 65));
         const y = 5 + ((i * 37 + step * 23) % Math.max(30, height - 5));
         overlay += `<rect x="${x}" y="${y}" width="${i % 3 ? 5 : 8}" height="${i % 3 ? 10 : 4}" rx="1" fill="${colors[i % colors.length]}" transform="rotate(${i * 23 + step * 31} ${x} ${y})" opacity="0.85"/>`;
       }
-      overlay += `<g transform="translate(${width / 2 - 184} ${height / 2 - 29}) rotate(-10 160 32)" opacity="${[0.45, 0.75, 1, 1, 0.9, 0.75][step]}"><rect width="320" height="72" rx="7" fill="#fff0a1" fill-opacity="0.94" stroke="#8a4938" stroke-width="5"/><rect x="7" y="7" width="306" height="58" rx="3" fill="none" stroke="#8a4938" stroke-width="1.5"/>${lettering("SHIPPED", 160, 53, 51, "#8a4938", 'text-anchor="middle" letter-spacing="5"')}</g>`;
+      const checklist = fx.motion === "victory";
+      overlay += `<g transform="translate(${width / 2 - 184} ${height / 2 - 29}) rotate(-10 160 32)" opacity="${[0.45, 0.75, 1, 1, 0.9, 0.75][step]}"><rect width="320" height="72" rx="7" fill="#fff0a1" fill-opacity="0.94" stroke="#8a4938" stroke-width="5"/><rect x="7" y="7" width="306" height="58" rx="3" fill="none" stroke="#8a4938" stroke-width="1.5"/>${lettering(checklist ? "SHIPPED" : "TURN DONE", 160, 53, checklist ? 51 : 44, "#8a4938", 'text-anchor="middle" letter-spacing="3"')}</g>`;
     }
   }
   if (fx.motion === "crumple") {
