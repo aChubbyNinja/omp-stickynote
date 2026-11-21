@@ -3,7 +3,7 @@ CONFIG += c++17 release link_pkgconfig
 CONFIG -= app_bundle
 TEMPLATE = app
 TARGET = omp-stickynote-overlay
-VERSION = 1.4.0
+VERSION = 1.4.1
 DEFINES += OVERLAY_VERSION=\\\"$$VERSION\\\"
 PKGCONFIG += wayland-client
 LIBS += -lLayerShellQtInterface

@@ -10,7 +10,7 @@ The welcome state stays quiet until there is real work to display:
 
 ![OMP Sticky welcoming a new session](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/welcome.png)
 
-**Version 1.4.0 — 2026-11-17.** Quiet by default, with optional paper effects and a private LAN office board.
+Local paper effects are on by default. The private LAN office board is opt-in.
 
 ## Install
 
@@ -83,7 +83,7 @@ omp -e /absolute/path/to/omp-stickynote/src/index.ts
 | `/sticky auto` | Return to the session title and live OMP todo list. |
 | `/sticky hide` / `/sticky show` | Hide or restore the note for this session. |
 | `/sticky` | Show command help. |
-| `/sticky fun on` / `/sticky fun off` | Enable or disable local paper effects; off by default, saved with this session branch. Does not change LAN sharing. |
+| `/sticky boring mode` / `/sticky fun on` | Turn local effects off or back on. The choice is saved with this session branch and does not change LAN sharing. |
 | `/sticky dnd` | Toggle a larger **DEEP WORK** fold-out sign. |
 | `/sticky dnd build` / `/sticky dnd off` | Show **WAITING ON A BUILD**, or restore the normal card. |
 | `/sticky crumple` | Animate dismissal without deleting the title or tasks; `/sticky show` restores them. |
@@ -94,7 +94,7 @@ The `|` character separates fields; labels cannot contain it in slash commands. 
 
 ## Paper effects and office features
 
-The normal note stays quiet by default. `/sticky fun on` enables local effects for the current session branch; DND, crumple, and office commands are separate explicit actions.
+New sessions start in fun mode. Resuming a branch restores its last explicit preference, including an opt-out saved in an earlier version. DND, crumple, and office sharing remain separate actions.
 
 1. **Victory moment.** Completing the note's remaining tasks under the same title briefly shows **SHIPPED** and confetti. This celebrates checkboxes, not a verified software release.
 2. **Curled paper and flutter.** A curled corner and brief flutter give real title/task changes and activity transitions a paper-like response.
@@ -105,7 +105,7 @@ The normal note stays quiet by default. `/sticky fun on` enables local effects f
 7. **Milestone stamps.** **FIRST COMMIT**, **TESTS PASSED**, and **RELEASED** respond to supported command results, not words in a title or prompt.
 8. **Do-not-disturb sign.** A larger fold-out **DEEP WORK** or **WAITING ON A BUILD** sign keeps the original note intact and suppresses fun effects until DND is off.
 9. **LAN office board.** Explicitly share project titles, up to three tasks/check states, and attention status with a trusted group. `/sticky office board` opens a live, read-only dashboard.
-10. **Release wave.** A recognized successful release sends a brief wave to office peers. Enable fun on both machines for visible local effects; receiving a wave never retransmits it.
+10. **Release wave.** A recognized successful release sends a brief wave to office peers. Peers in fun mode display the wave; receiving one never retransmits it.
 
 ![OMP Sticky paper effects in three states](https://raw.githubusercontent.com/aChubbyNinja/omp-stickynote/main/assets/paper-effects.png)
 
@@ -114,7 +114,6 @@ The normal note stays quiet by default. `/sticky fun on` enables local effects f
 Enter these commands in an interactive OMP session, pausing after each checkbox to see the effect:
 
 ```text
-/sticky fun on
 /sticky Release rehearsal | Prepare | Review | Finish
 /sticky done 1
 /sticky done 2
@@ -128,7 +127,7 @@ Enter these commands in an interactive OMP session, pausing after each checkbox 
 
 The third tick triggers the victory moment; it does not publish anything. `/sticky dnd` toggles deep work; `/sticky dnd build` selects the build sign explicitly. **Ctrl+Alt+D** also toggles deep work. To leave that shortcut unbound, start OMP with `OMP_STICKY_DND_SHORTCUT=off omp` and use the slash commands instead. DND is a visual sign, not an operating-system notification blocker, and does **not** stop office sharing.
 
-Finish with `/sticky fun off` to disable local effects, and `/sticky auto` to follow OMP todos again. Saved notes are not rewritten by animations; restoring or navigating branches does not replay old celebrations. Graphics backends show the artwork; ANSI fallback gives readable status labels rather than equivalent animation.
+Use `/sticky boring mode` to disable local effects, or `/sticky auto` to follow OMP todos again. Saved notes are not rewritten by animations; restoring or navigating branches does not replay old celebrations. Graphics backends show the artwork; ANSI fallback gives readable status labels rather than equivalent animation.
 
 ### What activity signals mean
 
@@ -184,7 +183,6 @@ Choose the address assigned to the intended Ethernet/Wi-Fi interface, not the ot
 In OMP on **both machines**:
 
 ```text
-/sticky fun on
 /sticky office on
 /sticky office board
 ```
@@ -197,7 +195,7 @@ The live, read-only board lists **SELF** and **REMOTE** sessions with names, pro
 - Shared fields are a sanitized device name, ephemeral session identity, title, up to three task labels/check states, attention status, and protocol timing/sequence data. Prompts, transcripts, working directories, environment variables, and the key are not snapshot fields. **Titles and tasks can still be sensitive.**
 - The key authenticates a **trusted group**, not individual users or machines: any key holder can read group snapshots or impersonate another participant. Share only with trusted peers; revoke membership by stopping sharing and rotating the key on all remaining machines, then restarting OMP with the new key. TTL 1 is a routing constraint, not a security boundary.
 - `/sticky office off`, hiding, crumpling, leaving/switching the session, and branch navigation stop sharing. `/sticky show` does not re-enable it. A clean exit sends a best-effort leave message; after an unclean exit or lost message, peers may remain visible until their **20-second** expiry.
-- `/sticky fun off`, closing the board, or enabling DND does **not** stop sharing. Always use `/sticky office off` when you want the network session to end.
+- `/sticky boring mode`, closing the board, or enabling DND does **not** stop sharing. Use `/sticky office off` to end the network session.
 
 ## Display and compatibility
 

@@ -18,7 +18,7 @@ interface SavedFun {
 const HELP = [
   "/sticky Title | task one | task two | task three",
   "/sticky auto · /sticky hide · /sticky show · /sticky done 1",
-  "/sticky fun on|off — session-local effects (off by default)",
+  "/sticky boring mode — turn local effects off · /sticky fun on — turn them back on",
   "/sticky dnd [build|off] — DEEP WORK / WAITING ON A BUILD; Ctrl+Alt+D toggles",
   "/sticky crumple — dismiss visually; show restores the unchanged note",
   "/sticky office on|off|board — explicitly opt into LAN sharing for this session",
@@ -35,7 +35,7 @@ function restoredFun(entries: readonly unknown[]): boolean {
     const data = custom.data as { version?: unknown; enabled?: unknown };
     if (data.version === 1 && typeof data.enabled === "boolean") return data.enabled;
   }
-  return false;
+  return true;
 }
 
 export default function stickynote(pi: ExtensionAPI): void {
@@ -59,7 +59,6 @@ export default function stickynote(pi: ExtensionAPI): void {
   let sessionId: string | undefined;
   let crumpled = false;
   let crumpling = false;
-  let fun = false;
   let dnd: "DEEP WORK" | "WAITING ON A BUILD" | undefined;
   let attention: VisualFrame["attention"] = "idle";
   let fx: Effects | undefined;
@@ -286,8 +285,7 @@ export default function stickynote(pi: ExtensionAPI): void {
     if (force || leaf !== lastLeaf) {
       const branch = ctx.sessionManager.getBranch();
       ({ saved, tasks } = restore(branch));
-      const nextFun = restoredFun(branch);
-      if (fun !== nextFun) { fun = nextFun; fx?.fun(fun); }
+      fx?.fun(restoredFun(branch));
       lastLeaf = leaf;
     }
     lastTitle = nextTitle;
@@ -329,7 +327,6 @@ export default function stickynote(pi: ExtensionAPI): void {
     lastTitle = undefined;
     crumpled = false;
     crumpling = false;
-    fun = false;
     dnd = undefined;
     attention = "idle";
   }
@@ -459,19 +456,19 @@ export default function stickynote(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("sticky", {
-    description: "Pin a title/tasks; auto, hide, show, done N, fun, dnd, crumple, office",
+    description: "Pin a title/tasks; auto, hide, show, done N, boring mode, fun on, dnd, crumple, office",
     handler: async (args, ctx) => {
       if (!active(ctx)) return ctx.ui.notify("Stickynote needs the active main interactive OMP terminal.", "warning");
       sync(ctx);
       const input = args.trim();
       if (!input || input === "help") return ctx.ui.notify(HELP, "info");
-      if (input === "fun on" || input === "fun off") {
-        fun = input === "fun on";
+      if (input === "boring mode" || input === "fun on") {
+        const fun = input === "fun on";
         const preference: SavedFun = { version: 1, enabled: fun };
         pi.appendEntry(FUN_ENTRY, preference);
         lastLeaf = ctx.sessionManager.getLeafId();
         fx?.fun(fun);
-        return ctx.ui.notify(`Sticky note fun is ${fun ? "on for this session" : "off"}. LAN sharing is unchanged.`, "info");
+        return ctx.ui.notify(`${fun ? "Fun mode on" : "Boring mode on"} for this session branch. LAN sharing is unchanged.`, "info");
       }
       if (input === "dnd" || input === "dnd build" || input === "dnd off") {
         return setDnd(input === "dnd off" ? undefined : input === "dnd build" ? "WAITING ON A BUILD" : dnd ? undefined : "DEEP WORK", ctx);

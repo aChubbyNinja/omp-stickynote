@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1 — 2026-11-20
+
+- Local paper effects now start enabled unless the current branch has a saved preference. Use `/sticky boring mode` to turn them off and `/sticky fun on` to turn them back on. Office sharing remains opt-in.
+
 ## 1.4.0 — 2026-11-17
 
 ### Paper effects and office features
