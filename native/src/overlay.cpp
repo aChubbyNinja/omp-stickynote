@@ -14,6 +14,8 @@
 #include <QScreen>
 #include <QSGSimpleTextureNode>
 #include <QSGTexture>
+#include <QStyleHints>
+#include <QTransform>
 #include <QThread>
 #include <QtGui/qguiapplication_platform.h>
 #include <wayland-client.h>
@@ -104,8 +106,75 @@ void RasterItem::setImage(const QImage &image)
     if (m_image.cacheKey() == image.cacheKey())
         return;
     m_image = image;
+    m_imageRegion = {};
+    // Half-opacity excludes the blurred shadow without rectangularizing the
+    // rounded, transformed paper or its foldout. Storage is bounded by the PNG.
+    for (int y = 0; y < image.height(); ++y) {
+        const auto *pixels = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+        int start = -1;
+        for (int x = 0; x <= image.width(); ++x) {
+            const bool paper = x < image.width() && qAlpha(pixels[x]) >= 128;
+            if (paper && start < 0)
+                start = x;
+            if (!paper && start >= 0) {
+                m_imageRegion += QRect(start, y, x - start, 1);
+                start = -1;
+            }
+        }
+    }
+    updateInputRegion();
     m_dirty = true;
     update();
+}
+
+void RasterItem::setInteraction(Interaction interaction)
+{
+    if (m_interaction == interaction)
+        return;
+    resetGesture();
+    m_interaction = interaction;
+    setAcceptedMouseButtons(interaction == Interaction::Disabled ? Qt::NoButton : Qt::LeftButton);
+    updateInputRegion();
+}
+
+void RasterItem::resetGesture()
+{
+    m_pressed = false;
+    m_firstClick = false;
+    m_doublePressed = false;
+}
+
+void RasterItem::updateInputRegion()
+{
+    if (m_interaction == Interaction::Tile) {
+        m_inputRegion = QRegion(boundingRect().toAlignedRect());
+    } else if (m_interaction == Interaction::Paper && !m_image.isNull()) {
+        QTransform scale;
+        scale.scale(width() / m_image.width(), height() / m_image.height());
+        m_inputRegion = scale.map(m_imageRegion).intersected(boundingRect().toAlignedRect());
+    } else {
+        m_inputRegion = {};
+    }
+}
+
+bool RasterItem::contains(const QPointF &point) const
+{
+    return boundingRect().contains(point)
+        && m_inputRegion.contains(QPoint(int(std::floor(point.x())), int(std::floor(point.y()))));
+}
+
+void RasterItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
+{
+    QQuickItem::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size())
+        updateInputRegion();
+}
+
+void RasterItem::itemChange(ItemChange change, const ItemChangeData &data)
+{
+    QQuickItem::itemChange(change, data);
+    if ((change == ItemVisibleHasChanged || change == ItemEnabledHasChanged) && !data.boolValue)
+        resetGesture();
 }
 
 QSGNode *RasterItem::updatePaintNode(QSGNode *old, UpdatePaintNodeData *)
@@ -132,23 +201,70 @@ QSGNode *RasterItem::updatePaintNode(QSGNode *old, UpdatePaintNodeData *)
 
 void RasterItem::mousePressEvent(QMouseEvent *event)
 {
-    m_pressed = event->button() == Qt::LeftButton && boundingRect().contains(event->position());
+    m_pressed = m_interaction != Interaction::Disabled && isVisible()
+        && window() && window()->isVisible() && event->button() == Qt::LeftButton
+        && contains(event->position());
     event->setAccepted(m_pressed);
+    if (!m_pressed) {
+        resetGesture();
+        return;
+    }
+    m_pressPosition = event->globalPosition();
+    const auto *hints = QGuiApplication::styleHints();
+    const QPointF distance = m_pressPosition - m_firstPosition;
+    m_doublePressed = m_firstClick && event->timestamp() >= m_firstTimestamp
+        && std::abs(distance.x()) <= hints->mouseDoubleClickDistance()
+        && event->timestamp() - m_firstTimestamp <= ulong(hints->mouseDoubleClickInterval())
+        && std::abs(distance.y()) <= hints->mouseDoubleClickDistance();
+    m_firstClick = false;
+    if (!m_doublePressed)
+        m_firstTimestamp = event->timestamp();
+}
+
+void RasterItem::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    // Qt Quick can deliver both the second press and a double-click event for
+    // that press. Do not overwrite the completed first-click candidate twice.
+    if (!m_pressed)
+        mousePressEvent(event);
+    else
+        event->accept();
+}
+
+void RasterItem::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_pressed && (!contains(event->position())
+        || (event->globalPosition() - m_pressPosition).manhattanLength()
+            > QGuiApplication::styleHints()->startDragDistance()))
+        resetGesture();
+    event->accept();
 }
 
 void RasterItem::mouseReleaseEvent(QMouseEvent *event)
 {
-    const bool clicked = m_pressed && event->button() == Qt::LeftButton
-        && boundingRect().contains(event->position());
+    const bool clicked = m_pressed && isVisible() && window() && window()->isVisible()
+        && event->button() == Qt::LeftButton && contains(event->position())
+        && (event->globalPosition() - m_pressPosition).manhattanLength()
+            <= QGuiApplication::styleHints()->startDragDistance();
+    const bool activate = clicked && (m_interaction == Interaction::Tile || m_doublePressed);
     m_pressed = false;
     event->setAccepted(clicked);
-    if (clicked)
+    if (activate) {
+        resetGesture();
         m_onClick();
+    } else if (clicked) {
+        m_firstClick = true;
+        m_firstPosition = m_pressPosition;
+    } else {
+        resetGesture();
+    }
 }
 
 void RasterItem::mouseUngrabEvent()
 {
-    m_pressed = false;
+    // Qt releases its implicit mouse grab after every normal release too.
+    if (m_pressed)
+        resetGesture();
 }
 
 Overlay::Overlay(qint64 parentPid, QObject *parent) : QObject(parent), m_parentPid(parentPid)
@@ -345,19 +461,27 @@ void Overlay::acceptFrame(const QJsonObject &frame)
     const double cellWidth = frame.value("cellWidthPx").toDouble();
     const double cellHeight = frame.value("cellHeightPx").toDouble();
     const bool minimized = frame.value("minimized").toBool();
+    const double scene = frame.value("scene").toDouble(-1);
     if (frame.value("op").toString() != "frame" || columns < 1 || columns > 100000
         || std::floor(columns) != columns || rows < 1 || rows > 100000 || std::floor(rows) != rows
         || !std::isfinite(cellWidth) || !std::isfinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0
         || !frame.value("visible").isBool() || !frame.value("centered").isBool()
-        || !frame.value("minimized").isBool()) {
+        || !frame.value("minimized").isBool() || !std::isfinite(scene)
+        || scene < 0 || scene > 9007199254740991.0 || std::floor(scene) != scene) {
         fail(QStringLiteral("Invalid frame fields"));
         return;
+    }
+    if (quint64(scene) != m_scene) {
+        m_scene = quint64(scene);
+        m_actionRequested = false;
+        if (m_raster)
+            m_raster->resetGesture();
     }
     if (minimized != m_minimized) {
         // Never resurrect a pre-minimize PNG while the current raster is pending.
         m_image = {};
         m_transparentTop = 0;
-        m_restoreRequested = false;
+        m_actionRequested = false;
     }
     m_minimized = minimized;
     if (m_minimized && m_tile.isNull())
@@ -534,7 +658,7 @@ void Overlay::announceReady()
         return;
     m_ready = true;
     m_startupDeadline.stop();
-    protocolEvent({{"event", "ready"}, {"protocol", 2}});
+    protocolEvent({{"event", "ready"}, {"protocol", 3}});
     applyState();
 }
 
@@ -546,14 +670,11 @@ void Overlay::createSurface(QScreen *screen)
     m_surfaceScreen = screen;
     m_window->setColor(Qt::transparent);
     m_window->setTitle(QStringLiteral("OMP sticky note"));
-    // Recreate on mode changes: Qt Wayland applies input transparency to every
-    // surface commit. Only the tiny minimized surface ever accepts pointer input.
-    auto flags = Qt::WindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus
-                                 | Qt::NoDropShadowWindowHint);
-    if (!m_minimized)
-        flags |= Qt::WindowTransparentForInput;
-    m_window->setFlags(flags);
-    m_surfaceMinimized = m_minimized;
+    m_window->setFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus
+                       | Qt::NoDropShadowWindowHint);
+    // A nonempty region outside the bootstrap surface accepts no pointer input.
+    m_surfaceMask = QRegion(-1, -1, 1, 1);
+    m_window->setMask(m_surfaceMask);
     m_layer = LayerShellQt::Window::get(m_window.get());
     m_layer->setScope(QStringLiteral("omp-stickynote-%1-%2").arg(m_parentPid).arg(::getpid()));
     m_layer->setLayer(LayerShellQt::Window::LayerOverlay);
@@ -566,19 +687,21 @@ void Overlay::createSurface(QScreen *screen)
     m_layer->setScreen(screen);
     m_layer->setCloseOnDismissed(false);
     m_raster = new RasterItem(m_window->contentItem(), [this] {
-        if (!m_minimized || !m_visible || !m_snapshotValid || m_restoreRequested
+        if (!m_visible || !m_snapshotValid || m_actionRequested
             || !m_window || !m_window->isVisible())
             return;
-        m_restoreRequested = true;
+        m_actionRequested = true;
         m_window->hide();
-        protocolEvent({{"event", "restore"}});
+        protocolEvent({{"event", m_minimized ? "restore" : "minimize"}, {"scene", qint64(m_scene)}});
     });
-    m_raster->setAcceptedMouseButtons(m_minimized ? Qt::LeftButton : Qt::NoButton);
+    m_raster->setInteraction(m_minimized ? RasterItem::Interaction::Tile : RasterItem::Interaction::Paper);
     m_raster->setImage(m_minimized ? m_tile : m_image);
     connect(m_window.get(), &QQuickWindow::sceneGraphError, this, [this](QQuickWindow::SceneGraphError, const QString &message) {
         fail(QStringLiteral("Qt Quick scene graph: %1").arg(message));
     });
     connect(m_window.get(), &QWindow::visibleChanged, this, [this](bool visible) {
+        if (!visible && m_raster)
+            m_raster->resetGesture();
         if (visible)
             QTimer::singleShot(0, this, &Overlay::announceReady);
     });
@@ -647,7 +770,7 @@ void Overlay::applyState()
             m_window->hide();
         return;
     }
-    if (!m_window || m_surfaceScreen != screen || m_surfaceMinimized != m_minimized)
+    if (!m_window || m_surfaceScreen != screen)
         createSurface(screen);
     if (!m_ready)
         return;
@@ -657,7 +780,7 @@ void Overlay::applyState()
         : DesktopState::placement(bounds, m_image.size(), m_columns,
                                   m_cellWidth, m_cellHeight, m_centered, m_transparentTop);
     const auto clipped = rasterRect.intersected(bounds).intersected(DesktopState::monitorRect(monitor));
-    const bool show = m_visible && !m_restoreRequested && (m_minimized || !m_image.isNull()) && !clipped.isEmpty()
+    const bool show = m_visible && !m_actionRequested && (m_minimized || !m_image.isNull()) && !clipped.isEmpty()
         && DesktopState::isVisible(owner, monitor, m_clients);
     m_refreshTimer.setInterval(show ? 150 : 500);
     if (!show) {
@@ -667,11 +790,25 @@ void Overlay::applyState()
     const auto output = DesktopState::monitorRect(monitor);
     const QPoint origin(int(std::floor(clipped.left())), int(std::floor(clipped.top())));
     const QSize size(int(std::ceil(clipped.right())) - origin.x(), int(std::ceil(clipped.bottom())) - origin.y());
+    if (bounds != m_gestureBounds)
+        m_raster->resetGesture();
+    m_gestureBounds = bounds;
     m_layer->setMargins(QMargins(origin.x() - int(output.left()), origin.y() - int(output.top()), 0, 0));
     m_layer->setDesiredSize(size);
     m_window->resize(size);
     m_raster->setPosition(rasterRect.topLeft() - origin);
     m_raster->setSize(rasterRect.size());
+    m_raster->setInteraction(m_minimized ? RasterItem::Interaction::Tile : RasterItem::Interaction::Paper);
+    QRegion mask = m_raster->inputRegion().translated(m_raster->position().toPoint())
+        .intersected(QRect(QPoint(), size));
+    // An empty QWindow mask restores input to the entire surface. Keep drawing
+    // faded paper while a nonempty, off-surface region makes it click-through.
+    if (mask.isEmpty())
+        mask = QRegion(-1, -1, 1, 1);
+    if (mask != m_surfaceMask) {
+        m_surfaceMask = mask;
+        m_window->setMask(mask);
+    }
     m_raster->setVisible(true);
     m_window->show();
     m_window->update();

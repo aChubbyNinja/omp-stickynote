@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QRegion>
 #include <QSocketNotifier>
 #include <QTimer>
 #include <QVector>
@@ -18,14 +19,29 @@ namespace LayerShellQt { class Window; }
 
 class RasterItem final : public QQuickItem {
 public:
+    enum class Interaction { Disabled, Paper, Tile };
     RasterItem(QQuickItem *parent, std::function<void()> onClick);
     void setImage(const QImage &image);
+    void setInteraction(Interaction interaction);
+    void resetGesture();
+    QRegion inputRegion() const { return m_inputRegion; }
+    bool contains(const QPointF &point) const override;
 protected:
     QSGNode *updatePaintNode(QSGNode *old, UpdatePaintNodeData *) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseUngrabEvent() override;
+    void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) override;
+    void itemChange(ItemChange change, const ItemChangeData &data) override;
 private:
+    void updateInputRegion();
+    Interaction m_interaction = Interaction::Disabled;
+    QRegion m_imageRegion, m_inputRegion;
+    ulong m_firstTimestamp = 0;
+    QPointF m_pressPosition, m_firstPosition;
+    bool m_firstClick = false, m_doublePressed = false;
     QImage m_image;
     bool m_dirty = true;
     bool m_pressed = false;
@@ -68,7 +84,10 @@ private:
     bool m_refreshPending = false, m_ready = false, m_failed = false;
     int m_snapshotAttempts = 0;
     bool m_stdinOpen = true, m_visible = false, m_centered = false;
-    bool m_minimized = false, m_surfaceMinimized = false, m_restoreRequested = false;
+    bool m_minimized = false, m_actionRequested = false;
+    quint64 m_scene = 0;
+    QRectF m_gestureBounds;
+    QRegion m_surfaceMask;
     int m_columns = 0, m_transparentTop = 0;
     double m_cellWidth = 0, m_cellHeight = 0;
     QImage m_image, m_tile;

@@ -1,9 +1,42 @@
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
-import { getCellDimensions, getImageDimensions, Image, TERMINAL, truncateToWidth, visibleWidth, type Component } from "@oh-my-pi/pi-tui";
+import { getCellDimensions, getImageDimensions, Image, TERMINAL, truncateToWidth, visibleWidth, type Component, type TUI } from "@oh-my-pi/pi-tui";
 import { continuesAnimation, effectLabels, semanticFrameKey, visualFrameKey } from "./art.ts";
 import type { VisualFrame } from "./effects.ts";
-import { PAPER_WIDTH, paperSvg, WELCOME, wrapLabel } from "./paper.ts";
+import { PAPER_WIDTH, paperSvg, WELCOME, wrapLabel, type PaperShape } from "./paper.ts";
 import { cleanLabel, type Note } from "./state.ts";
+import { NotePointer, type PaperSurface } from "./pointer.ts";
+
+/** Test cell centers against the opaque SVG body, not its padded image rectangle. */
+function graphicPaperHit(shape: PaperShape, scale: number, cell: RasterRequest["cell"]): PaperSurface["contains"] {
+  const transforms = [...shape.transform.matchAll(/(rotate|translate)\(([^)]+)\)/g)].map(match => ({
+    kind: match[1], values: match[2].trim().split(/[ ,]+/).map(Number),
+  }));
+  return (col, row) => {
+    if (!shape.visible) return false;
+    let x = (col + 0.5) * cell.widthPx / scale - shape.x;
+    let y = (row + 0.5) * cell.heightPx / scale - shape.y;
+    // SVG transform lists compose right-to-left, so their inverses apply in
+    // source order. Crumple's changing scale is deliberately noninteractive.
+    for (const { kind, values } of transforms) {
+      if (kind === "translate") { x -= values[0]; y -= values[1] ?? 0; }
+      else {
+        const angle = -values[0] * Math.PI / 180;
+        const cx = values[1] ?? 0;
+        const cy = values[2] ?? 0;
+        const dx = x - cx;
+        const dy = y - cy;
+        x = cx + dx * Math.cos(angle) - dy * Math.sin(angle);
+        y = cy + dx * Math.sin(angle) + dy * Math.cos(angle);
+      }
+    }
+    x -= 8;
+    y -= 5;
+    if (x < 0 || y < 0 || x >= shape.width || y >= shape.height) return false;
+    const dx = Math.max(13 - x, x - (shape.width - 13), 0);
+    const dy = Math.max(13 - y, y - (shape.height - 13), 0);
+    return dx * dx + dy * dy <= 13 * 13;
+  };
+}
 
 // Deliberately independent of the host theme: sticky-paper yellow, dark ink.
 const PAPER = "\x1b[48;2;255;231;128m\x1b[38;2;41;38;22m";
@@ -53,14 +86,34 @@ export class StickyNote implements Component {
   #graphicsProtocol: typeof TERMINAL.imageProtocol = null;
   #placeholderRows: readonly string[] = [];
   #placeholderWidth = -1;
+  #pointer: NotePointer;
+  #onMinimize?: () => void;
+  #surface?: PaperSurface;
+  #fallbackSurface?: PaperSurface;
+  #imageHit?: PaperSurface["contains"];
 
   constructor(options: StickyNoteOptions = {}) {
     this.#options = options;
+    this.#pointer = new NotePointer(this, () => this.#surface, true, () => this.#onMinimize?.());
   }
 
   /** Image-owned control rows for the host's post-paint adapter, never overlay composition. */
   get graphicsRows(): readonly string[] | undefined {
     return !this.#disposed && this.#graphicsProtocol === TERMINAL.imageProtocol ? this.#graphicsRows : undefined;
+  }
+
+  /** Activate only after mounting a released overlay and restoring editor focus. */
+  activate(tui: TUI, onMinimize: () => void): void {
+    if (this.#disposed) return;
+    this.#onMinimize = onMinimize;
+    this.#pointer.activate(tui);
+  }
+
+  /** Release pointer reporting before hiding or replacing the paper overlay. */
+  deactivate(): void {
+    this.#pointer.deactivate();
+    this.#surface = undefined;
+    this.#onMinimize = undefined;
   }
 
   update(note: Note, fx?: VisualFrame): void {
@@ -101,6 +154,7 @@ export class StickyNote implements Component {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.deactivate();
     this.#desired = undefined;
     this.#image?.release();
     this.#image = undefined;
@@ -169,6 +223,7 @@ export class StickyNote implements Component {
       this.#image?.release();
       this.#image = image;
       this.#imageKey = request.key;
+      this.#imageHit = graphicPaperHit(paper.paper, Math.min(scale, request.widthPx / paper.width, request.heightPx / paper.height), request.cell);
       this.#imageScene = request.scene;
       this.#requestRender();
     } catch (error) {
@@ -183,8 +238,10 @@ export class StickyNote implements Component {
 
   render(width: number): readonly string[] {
     if (this.#disposed) return [];
+    this.#surface = undefined;
     this.#graphicsRows = undefined;
     width = Number.isFinite(width) ? Math.max(1, Math.floor(width)) : 1;
+    this.#pointer.rendered(width);
     const availableRows = this.#options.maxRows?.() ?? process.stdout.rows ?? 40;
     const maxRows = Number.isFinite(availableRows) ? Math.max(1, Math.floor(availableRows)) : 40;
     if (TERMINAL.imageProtocol) {
@@ -215,6 +272,7 @@ export class StickyNote implements Component {
             this.#graphicsRows = lines;
             if (this.#imageKey !== key && !this.#running && this.#failedKey !== key) void this.#rasterize();
             this.#graphicsProtocol = TERMINAL.imageProtocol;
+            this.#surface = { width, height: lines.length, contains: this.#imageHit! };
             if (this.#placeholderWidth !== width || this.#placeholderRows.length !== lines.length) {
               this.#placeholderWidth = width;
               this.#placeholderRows = Array<string>(lines.length).fill(" ".repeat(width));
@@ -235,7 +293,10 @@ export class StickyNote implements Component {
   }
 
   #fallback(width: number, maxRows: number): readonly string[] {
-    if (width === this.#width && maxRows === this.#maxRows) return this.#rows;
+    if (width === this.#width && maxRows === this.#maxRows) {
+      this.#surface = this.#fallbackSurface;
+      return this.#rows;
+    }
     const shadow = width >= 8 ? 1 : 0;
     const cardWidth = width - shadow;
     const padding = cardWidth >= 8 ? 2 : 0;
@@ -273,6 +334,9 @@ export class StickyNote implements Component {
     this.#width = width;
     this.#maxRows = maxRows;
     this.#rows = rows.length > maxRows ? rows.slice(0, maxRows) : rows;
+    const paperRows = Math.min(this.#rows.length, rows.length - shadow);
+    this.#surface = { width, height: this.#rows.length, contains: (col, row) => col < cardWidth && row < paperRows };
+    this.#fallbackSurface = this.#surface;
     return this.#rows;
   }
 }

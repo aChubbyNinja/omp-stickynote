@@ -12,6 +12,7 @@ import { cleanLabel, type Note } from "./state.ts";
 interface DesktopOptions {
   onReady: () => void;
   onRestore: () => void;
+  onMinimize: () => void;
   onError: (error: unknown) => void;
 }
 
@@ -88,6 +89,8 @@ export class DesktopNote {
   #fxKey = "";
   #revision = 0;
   #scene = 0;
+  #interactionScene = 0;
+  #sentScene?: number;
   #frame?: DesktopFrame;
   #sentFrame?: DesktopFrame;
   #sentRasterKey?: string;
@@ -147,6 +150,7 @@ export class DesktopNote {
       this.#scene++;
       this.#raster = undefined;
     }
+    if (!sameNote) this.#interactionScene++;
     this.#fx = fx;
     this.#fxKey = fxKey;
     this.#note = next;
@@ -168,6 +172,7 @@ export class DesktopNote {
       minimized: frame.minimized,
     };
     if (sameFrame(this.#frame, next)) return;
+    this.#interactionScene++;
     if (this.#frame?.minimized !== next.minimized) {
       // A restored surface must wait for its current note, never reuse the
       // pre-minimize PNG or accept an in-flight raster from that scene.
@@ -253,12 +258,13 @@ export class DesktopNote {
     if (!this.ready || !child || !frame || this.#blocked) return;
     const raster = this.#raster?.scene === this.#desired?.scene ? this.#raster : undefined;
     const png = frame.visible && !frame.minimized && raster && raster.key !== this.#sentRasterKey ? raster.png : undefined;
-    if (!png && sameFrame(this.#sentFrame, frame)) return;
+    if (!png && sameFrame(this.#sentFrame, frame) && this.#sentScene === this.#interactionScene) return;
     try {
       // A false return still accepts this frame. Keep only the latest state until
       // drain, instead of accumulating PNGs or geometry writes in the stream.
-      this.#blocked = !child.stdin.write(`${JSON.stringify({ op: "frame", ...frame, ...(png ? { png } : {}) })}\n`);
+      this.#blocked = !child.stdin.write(`${JSON.stringify({ op: "frame", ...frame, scene: this.#interactionScene, ...(png ? { png } : {}) })}\n`);
       this.#sentFrame = frame;
+      this.#sentScene = this.#interactionScene;
       if (png) this.#sentRasterKey = raster!.key;
     } catch (error) {
       this.#fail(error);
@@ -300,11 +306,14 @@ export class DesktopNote {
         this.#fail(new Error(`Desktop sticky note renderer: ${message.message}`));
         return;
       }
-      if (message.event === "restore" && this.#ready) {
-        // A click already queued by the helper must not reopen a hidden note.
-        if (this.#frame?.visible && this.#frame.minimized) {
+      if ((message.event === "restore" || message.event === "minimize") && this.#ready) {
+        // The helper may have queued an action before a dialog, resize, or new
+        // note replaced its scene. Never apply it to the replacement surface.
+        if ("scene" in message && message.scene === this.#interactionScene && this.#frame?.visible &&
+            this.#frame.minimized === (message.event === "restore")) {
           try {
-            this.#options.onRestore();
+            if (message.event === "restore") this.#options.onRestore();
+            else this.#options.onMinimize();
           } catch (error) {
             this.#fail(error);
           }
@@ -316,8 +325,8 @@ export class DesktopNote {
         this.#fail(new Error("Desktop sticky note renderer sent an unexpected protocol event"));
         return;
       }
-      if (!("protocol" in message) || message.protocol !== 2) {
-        this.#fail(new Error("Desktop sticky note renderer lacks clickable minimize support; rebuild or upgrade the native helper"));
+      if (!("protocol" in message) || message.protocol !== 3) {
+        this.#fail(new Error("Desktop sticky note renderer lacks paper double-click support; rebuild or upgrade the native helper"));
         return;
       }
       this.#ready = true;

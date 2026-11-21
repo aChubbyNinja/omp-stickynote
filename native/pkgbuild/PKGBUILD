@@ -1,8 +1,8 @@
 # Run native/bin/package so makepkg's src/ and pkg/ never overlap project sources.
 pkgname=omp-stickynote-overlay
-pkgver=1.5.0
+pkgver=1.6.0
 pkgrel=1
-pkgdesc='Transparent click-through Hyprland companion for OMP sticky notes'
+pkgdesc='Interactive Hyprland companion for OMP sticky notes'
 arch=('x86_64' 'aarch64')
 url='https://github.com/aChubbyNinja/omp-stickynote'
 license=('MIT')

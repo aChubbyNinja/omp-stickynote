@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 — 2026-11-21
+
+- Double-click the expanded paper to minimize it to the existing top-right square; single-click the square to reopen it. This uses the same branch-local state as `/sticky minimize` and leaves the title and tasks intact.
+- The expanded Hyprland note now receives pointer input on the paper itself, not its transparent shadow or gutters. It still never takes keyboard focus.
+
 ## 1.5.0 — 2026-11-21
 
 - Added `/sticky minimize`: collapse the note into a small yellow `+` square in the upper-right corner. Left-click it or use `/sticky show` to restore the full note with current tasks and checkmarks. The minimized state is saved on the branch; office sharing is unchanged.

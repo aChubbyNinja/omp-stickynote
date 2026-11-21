@@ -19,7 +19,7 @@ interface SavedFun {
 const HELP = [
   "/sticky Title | task one | task two | task three",
   "/sticky auto · /sticky hide · /sticky show · /sticky done 1",
-  "/sticky minimize — collapse to a yellow square; click it or use /sticky show to reopen",
+  "Double-click the paper or use /sticky minimize; click the yellow square or use /sticky show to reopen",
   "/sticky boring mode — turn local effects off · /sticky fun on — turn them back on",
   "/sticky dnd [build|off] — DEEP WORK / WAITING ON A BUILD; Ctrl+Alt+D toggles",
   "/sticky crumple — dismiss visually; show restores the unchanged note",
@@ -128,10 +128,10 @@ export default function stickynote(pi: ExtensionAPI): void {
     fx?.note(content(), true);
   }
 
-  function expandTile(ctx: ExtensionContext): void {
-    if (!active(ctx) || !saved.minimized || !visible() || crumpling || boardOpen) return;
-    saved = { ...saved, minimized: false };
-    restoreCard();
+  function setMinimized(ctx: ExtensionContext, minimized: boolean): void {
+    if (!active(ctx) || !!saved.minimized === minimized || !visible() || crumpling || boardOpen) return;
+    saved = { ...saved, minimized };
+    if (!minimized) restoreCard();
     save(ctx);
   }
 
@@ -270,6 +270,7 @@ export default function stickynote(pi: ExtensionAPI): void {
   function unmount(): void {
     clearGraphics();
     paintDesktop(false);
+    note.deactivate();
     tile?.deactivate();
     overlay?.hide();
     overlay = undefined;
@@ -302,6 +303,9 @@ export default function stickynote(pi: ExtensionAPI): void {
     if (entry) entry.released = true;
     tui.setFocus(previous);
     if (component === tile) tile.activate(tui);
+    else note.activate(tui, () => {
+      if (current && mounted === component) setMinimized(current, true);
+    });
   }
 
   function sync(ctx: ExtensionContext, force = false): void {
@@ -397,13 +401,16 @@ export default function stickynote(pi: ExtensionAPI): void {
       tui = liveTui;
       const ownedNote = note;
       tile = new MinimizedNote({ onRestore: () => {
-        if (owner === lifecycle && note === ownedNote) expandTile(ctx);
+        if (owner === lifecycle && note === ownedNote) setMinimized(ctx, false);
       } });
       if (DesktopNote.available()) {
         desktop = new DesktopNote({
           onReady: () => { if (owner === lifecycle && note === ownedNote) paint(); },
           onRestore: () => {
-            if (owner === lifecycle && note === ownedNote) expandTile(ctx);
+            if (owner === lifecycle && note === ownedNote) setMinimized(ctx, false);
+          },
+          onMinimize: () => {
+            if (owner === lifecycle && note === ownedNote) setMinimized(ctx, true);
           },
           onError: error => {
             if (owner !== lifecycle || note !== ownedNote) return;
@@ -520,11 +527,7 @@ export default function stickynote(pi: ExtensionAPI): void {
       if (!input || input === "help") return ctx.ui.notify(HELP, "info");
       if (input === "minimize") {
         if (!visible() || crumpling) return ctx.ui.notify("The note is dismissed. Use /sticky show first.", "info");
-        if (!saved.minimized) {
-          saved = { ...saved, minimized: true };
-          save(ctx);
-        }
-        return;
+        return setMinimized(ctx, true);
       }
       if (input === "boring mode" || input === "fun on") {
         const fun = input === "fun on";

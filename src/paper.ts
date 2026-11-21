@@ -42,8 +42,18 @@ function xml(text: string): string {
     .replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!);
 }
 
+/** The opaque paper body in SVG coordinates; shadows and foldout gutters are not paper. */
+export interface PaperShape {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  transform: string;
+  visible: boolean;
+}
+
 /** Terminal geometry scales the paper; title growth adds space without changing typography. */
-export function paperSvg(note: Note, rowHeight = 0, maxWidth = MAX_PAPER_WIDTH, fx?: VisualFrame): { svg: string; width: number; height: number } {
+export function paperSvg(note: Note, rowHeight = 0, maxWidth = MAX_PAPER_WIDTH, fx?: VisualFrame): { svg: string; width: number; height: number; paper: PaperShape } {
   const headline = headlineLayout(note.title, maxWidth);
   const width = headline.width;
   const extra = width - PAPER_WIDTH;
@@ -102,5 +112,8 @@ ${art.ornaments}${art.foldout}
 ${art.overlay}
 </g>
 </svg>`;
-  return { svg, width, height };
+  return {
+    svg, width, height,
+    paper: { x: 24, y: 24 + topInset, width: 496 + extra, height: paperHeight, transform: art.transform, visible: art.opacity > 0 && fx?.motion !== "crumple" },
+  };
 }
