@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.0 — 2026-11-21
+
+- **TURN DONE** and **SHIPPED** now hold their final frame without a timer or repeating animation. A new prompt or question replaces the completed state.
+- A high-contrast **ANSWER NEEDED** sign distinguishes waiting for you from finished work. The native OMP question form keeps its own keyboard and mouse controls.
+- The builders now share the **WORKING** row: a hammer mechanic, a goggled blueprint reader, sparks and a little workshop robot. Text terminals show the crew inline too.
+
 ## 1.6.1 — 2026-11-21
 
 - The construction crew is visible during ordinary OMP work, including research and tool-free replies. Finishing a successful turn shows **TURN DONE** confetti; only a completed checklist earns **SHIPPED**. Failed or interrupted turns do not celebrate.

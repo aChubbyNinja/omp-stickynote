@@ -22,13 +22,15 @@ export function effectLabels(fx?: VisualFrame): readonly string[] {
   if (fx.dnd) labels.push(`DO NOT DISTURB — ${fx.dnd}`);
   if (fx.motion === "crumple") labels.push("Paper crumpled — a fresh start");
   if (!fx.fun || fx.dnd) return labels;
+  if (fx.attention === "waiting" && fx.motion !== "crumple") return ["ANSWER NEEDED"];
   if (fx.motion === "victory" || fx.motion === "turnDone") {
     const sparks = ["* . +", ". + *", "+ * ."];
     labels.push(`${fx.motion === "victory" ? "SHIPPED!" : "TURN DONE!"}  ${sparks[fx.step % 3]}  ${sparks[(fx.step + 1) % 3]}`);
   }
-  if (fx.crew !== "none") labels.push(`👷 Construction crew: ${({ working: "on the job", editing: "editing", build: "building", test: "testing", pass: "passed", fail: "failed" })[fx.crew]}`);
+  const status = ({ idle: "Ready", working: "WORKING", waiting: "Your turn", finished: "Finished" })[fx.attention];
+  const crew = ({ none: "", working: "👷 ⚒ 👷", editing: "👷 ⚒ 👷  Editing", build: "👷 ⚒ 👷  Building", test: "👷 ⚗ 👷  Testing", pass: "👷 ⚑ 👷  Passed", fail: "👷 ⚑ 👷  Failed" })[fx.crew];
+  labels.push(crew ? `${status}   ${crew}` : status);
   if (fx.stamp) labels.push(fx.stamp);
-  labels.push(({ idle: "Ready", working: "Working", waiting: "Needs your attention", finished: "Finished" })[fx.attention]);
   if (fx.motion === "wave") labels.push("Office wave received");
   if (fx.motion === "flutter") labels.push("A little paper flutter");
   return labels;
@@ -41,30 +43,43 @@ export function semanticFrameKey(fx?: VisualFrame): string {
 /** Reserve only the rows that have visible status or crew artwork. */
 export function paperRailHeight(fx?: VisualFrame): number {
   if (!fx?.fun || fx.dnd) return 0;
-  return fx.crew === "none" ? 52 : 108;
+  return fx.crew === "none" ? 52 : 76 + (fx.stamp ? 36 : 0);
 }
 
 function lettering(text: string, x: number, y: number, size: number, fill: string, extra = ""): string {
   return `<text x="${x}" y="${y}" font-family="DejaVu Sans Mono, Noto Sans Mono, monospace" font-size="${size}" font-weight="700" fill="${fill}" ${extra}>${text}</text>`;
 }
 
-function worker(x: number, y: number, pose: number, color: string, tool: "hammer" | "clipboard" | "flag"): string {
-  const arm = [-10, -17, -23, -14, -7, -18][pose];
-  const handX = 16 + (pose % 2) * 3;
-  const equipment = tool === "hammer"
-    ? `<path d="M${handX} ${arm} l8 -9" stroke="#665039" stroke-width="3"/><path d="M${handX + 4} ${arm - 10} l9 5" stroke="#596066" stroke-width="5"/>`
-    : tool === "clipboard"
-      ? '<rect x="12" y="-22" width="13" height="18" rx="2" fill="#f9f6dc" stroke="#514936"/><path d="M15 -16 h7 M15 -12 h5" stroke="#547061"/>'
-      : `<path d="M19 -25 v30" stroke="#655139" stroke-width="2"/><path d="M20 -25 h23 l-5 8 h-18" fill="${color}"/>`;
-  return `<g transform="translate(${x} ${y})" stroke="#473d2c" stroke-linecap="round" stroke-linejoin="round"><path d="M-5 -1 l-5 10 m16 -10 l5 10" fill="none" stroke-width="4"/><path d="M-8 -19 h15 l2 19 h-19 Z" fill="${color}" stroke-width="1.5"/><path d="M-5 -16 l-11 10 M5 -16 L${handX} ${arm}" fill="none" stroke-width="3"/><circle cy="-28" r="7" fill="#d9a977" stroke-width="1"/><path d="M-10 -29 Q-9 -42 0 -40 Q10 -40 10 -29 Z" fill="#f5b62d" stroke-width="1.3"/><path d="M-12 -29 h24 M0 -39 v7" fill="none" stroke-width="2"/>${equipment}</g>`;
+function worker(x: number, y: number, pose: number, partner: boolean, flag: boolean): string {
+  const ink = "#433429";
+  const hat = partner ? "#27a29a" : "#ffae29";
+  const coat = partner ? "#166d70" : "#db5728";
+  const face = partner ? "#ad6946" : "#f3bc86";
+  const swing = [-24, -42, -12, 18, 2, -16][pose];
+  const lift = [0, -2, -3, 0, 1, 0][pose];
+  const tool = flag
+    ? `<path d="M18 -25 v24" stroke="${ink}" stroke-width="3"/><path d="M19 -26 l20 4 -6 5 4 4 -18 -3 Z" fill="#ef664d"/>`
+    : partner
+      ? `<g transform="rotate(-10 15 -16)"><rect x="9" y="-27" width="20" height="21" rx="2" fill="#83d7db" stroke="${ink}" stroke-width="2"/><path d="M12 -22 h11 v6 h-6 v6" fill="none" stroke="#24546b" stroke-width="2"/></g>`
+      : `<g transform="rotate(${swing} 13 -15)"><path d="M8 -10 l14 -17" stroke="${ink}" stroke-width="5"/><path d="m14 -29 7 -5 13 10 -5 6 Z" fill="#497a92" stroke="${ink}" stroke-width="2"/></g>`;
+  return `<g transform="translate(${x} ${y + lift}) scale(${partner ? -1 : 1} 1)" stroke-linecap="round" stroke-linejoin="round">
+<path d="m-7 -3 -3 10 h-6 m22 -10 4 10 h7" fill="none" stroke="${ink}" stroke-width="6"/>
+<path d="M-12 -23 Q0 -28 11 -22 l4 21 q-14 7 -29 0 Z" fill="${coat}" stroke="${ink}" stroke-width="2.5"/>
+<path d="m-7 -22 4 18 m9 -18 -3 19" fill="none" stroke="#fff0a2" stroke-width="3.5"/>
+<path d="m-11 -18 -8 9 5 3 m23 -14 7 6" stroke="${ink}" stroke-width="5" fill="none"/>
+<rect x="-12" y="-44" width="26" height="23" rx="9" fill="${face}" stroke="${ink}" stroke-width="2"/>
+<path d="M-15 -38 q1 -15 14 -16 13 -1 16 14 l4 3 -35 3 Z" fill="${hat}" stroke="${ink}" stroke-width="2.5"/>
+<path d="m-3 -52 1 8" stroke="#ffeba6" stroke-width="3"/>
+${partner ? `<rect x="-7" y="-36" width="21" height="8" rx="3" fill="#acedef" stroke="${ink}" stroke-width="2"/><path d="m1 -34 -2 4 m10 -5 -2 4" stroke="white" stroke-width="2"/>` : `<path d="M-2 -33 v2 m10 -3 v2" stroke="${ink}" stroke-width="3"/>`}
+<path d="M3 -26 q4 3 7 -2" fill="none" stroke="${ink}" stroke-width="2"/>${tool}</g>`;
 }
 
 function crewArt(fx: VisualFrame, width: number, height: number, step: number): string {
   if (fx.crew === "none") return "";
-  const y = height - 8;
-  const x = width / 2 - 24;
+  const y = height - 14;
+  const x = width - 182;
   const color = fx.crew === "fail" ? "#bc4b36" : fx.crew === "pass" ? "#397754" : "#df8d36";
-  const beam = `<path d="M${x - 115} ${y + 8} h230" stroke="#8a703c" stroke-width="3"/><path d="M${x - 105} ${y + 9} l-8 8 m218 -8 l8 8" stroke="#8a703c" stroke-width="3"/>`;
+  const beam = `<path d="M${x - 101} ${y + 11} h200" stroke="#956224" stroke-width="4" stroke-linecap="round"/>`;
   const scene = fx.crew === "build"
     ? `<g fill="#bd7945" stroke="#85532b" stroke-width="1"><rect x="${x - 8}" y="${y - 9}" width="24" height="11"/><rect x="${x + 18}" y="${y - 9}" width="24" height="11"/><rect x="${x + 4}" y="${y - 21}" width="24" height="11"/></g><path d="M${x + 13} ${y - 30} l${step % 2 ? 4 : -4} -6" stroke="#b58438" stroke-width="2"/>`
     : fx.crew === "test"
@@ -72,9 +87,11 @@ function crewArt(fx: VisualFrame, width: number, height: number, step: number): 
       : fx.crew === "editing"
         ? `<g transform="translate(${x - 14} ${y - 32})"><rect width="48" height="32" rx="3" fill="#faedbe" stroke="#655139" stroke-width="2"/><path d="m14 8 -7 7 7 7 m19 -14 7 7 -7 7 m-7 -17 -6 20" stroke="#397754" stroke-width="3" fill="none"/></g>`
         : fx.crew === "working"
-          ? `<g transform="translate(${x - 9} ${y - 28})"><path d="M0 0 h39 v27 H0 Z" fill="#d6e5dc" stroke="#506b65" stroke-width="2"/><path d="M6 6 h12 v13 h13 M24 6 h9 v7" fill="none" stroke="#507270" stroke-width="2"/></g>`
+          ? `<g transform="translate(${x - 17} ${y - 32})"><rect x="1" y="3" width="42" height="29" rx="6" fill="#53899a" stroke="#433429" stroke-width="2.5"/><rect x="7" y="8" width="30" height="15" rx="4" fill="#183d43"/><path d="M14 13 v3 m14 -3 v3" stroke="#9df4d3" stroke-width="4"/><path d="M22 2 v-7" stroke="#433429" stroke-width="2"/><circle cx="22" cy="-7" r="4" fill="#f26749"/></g>`
           : lettering(fx.crew === "pass" ? "PASS" : "FAIL", x + 9, y - 9, 15, color, 'text-anchor="middle"');
-  return `<g>${beam}${worker(x - 59, y - 2, step, color, fx.crew === "build" || fx.crew === "editing" ? "hammer" : "clipboard")}${scene}${worker(x + 71, y - 2, (step + 2) % 6, color, fx.crew === "pass" || fx.crew === "fail" ? "flag" : "clipboard")}</g>`;
+  const sparks = fx.crew === "working" || fx.crew === "editing" || fx.crew === "build"
+    ? `<g transform="translate(${x - 31} ${y - 30}) rotate(${step * 6 - 12})" fill="none" stroke="#bb4926" stroke-width="3" stroke-linecap="round"><path d="m-2 -7 -4 -6 m9 5 2 -8 m5 14 6 -4"/></g>` : "";
+  return `<g>${beam}${scene}${worker(x - 65, y, step, false, false)}${worker(x + 73, y, (step + 2) % 6, true, fx.crew === "pass" || fx.crew === "fail")}${sparks}</g>`;
 }
 
 export function paperArt(fx: VisualFrame | undefined, width: number, height: number): {
@@ -106,7 +123,7 @@ export function paperArt(fx: VisualFrame | undefined, width: number, height: num
     ornaments += `<path d="M${right - curl} ${height + 5} Q${right + 8} ${height + 12} ${right + 8} ${height - curl}" fill="#9d8132" opacity="0.18"/><path d="M${right - curl} ${height + 5} Q${right - 5} ${height - 4} ${right + 8} ${height - curl} Q${right - curl - 1} ${height - curl + 4} ${right - curl} ${height + 5} Z" fill="url(#curl)" stroke="#d6b453" stroke-width="0.7"/>`;
     const attention = ({ idle: "READY", working: "WORKING", waiting: "YOUR TURN", finished: "FINISHED" })[fx.attention];
     const color = ({ idle: "#49452e", working: "#24533c", waiting: "#87401f", finished: "#24534b" })[fx.attention];
-    const railY = height - paperRailHeight(fx) + 8;
+    const railY = fx.crew === "none" ? height - 44 : height - 55;
     const badgeWidth = attention.length * 16 + 70;
     const badge = fx.attention === "working"
       ? `<path d="M0 0 H${badgeWidth - 12} l12 20 -12 20 H0 Z"/>`
@@ -122,7 +139,8 @@ export function paperArt(fx: VisualFrame | undefined, width: number, height: num
     ornaments += `<g transform="translate(32 ${railY})"><g fill="${color}">${badge}</g><g fill="none" stroke="#fff9de" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}${fx.motion === "pulse" ? `<circle cx="23" cy="20" r="${[14, 16, 18, 17, 15, 14][step]}" opacity="0.45"/>` : ""}</g>${lettering(attention, 49, 29, 26, "#fff9de")}</g>`;
     if (fx.stamp) {
       const stampWidth = fx.stamp.length * 10 + 24;
-      ornaments += `<g transform="translate(${right - stampWidth - 7} ${railY + 6}) rotate(-4 ${stampWidth / 2} 15)" opacity="0.9"><rect width="${stampWidth}" height="30" rx="3" fill="none" stroke="#85553d" stroke-width="2"/><rect x="3" y="3" width="${stampWidth - 6}" height="24" rx="2" fill="none" stroke="#85553d" stroke-width="0.7"/>${lettering(fx.stamp, stampWidth / 2, 21, 16, "#85553d", 'text-anchor="middle"')}</g>`;
+      const stampY = fx.crew === "none" ? railY + 6 : height - 108;
+      ornaments += `<g transform="translate(${right - stampWidth - 7} ${stampY}) rotate(-4 ${stampWidth / 2} 15)" opacity="0.9"><rect width="${stampWidth}" height="30" rx="3" fill="none" stroke="#85553d" stroke-width="2"/><rect x="3" y="3" width="${stampWidth - 6}" height="24" rx="2" fill="none" stroke="#85553d" stroke-width="0.7"/>${lettering(fx.stamp, stampWidth / 2, 21, 16, "#85553d", 'text-anchor="middle"')}</g>`;
     }
     ornaments += crewArt(fx, width, height, fx.motion ? step : 0);
     if (fx.motion === "flutter" || fx.motion === "wave") {
@@ -133,7 +151,16 @@ export function paperArt(fx: VisualFrame | undefined, width: number, height: num
         ornaments += `<g fill="none" stroke="#6c9b85" stroke-width="2" opacity="${(6 - step) / 8}"><circle cx="${width - 98}" cy="${height - 25}" r="${radius}"/><circle cx="${width - 98}" cy="${height - 25}" r="${radius + 10}"/></g>`;
       }
     }
-    if (fx.motion === "victory" || fx.motion === "turnDone") {
+    if (fx.attention === "waiting" && fx.motion !== "crumple") {
+      // A straight, solid sign reads differently from the tilted confetti stamp
+      // even in monochrome. Keep the sign inside the interactive paper bounds.
+      const w = Math.min(width - 100, 500);
+      overlay = `<g transform="translate(${width / 2 - 24 - w / 2} ${height / 2 - 52})">
+<rect width="${w}" height="104" rx="10" fill="#743217"/>
+<rect x="5" y="5" width="${w - 10}" height="94" rx="7" fill="none" stroke="#ffd38a" stroke-width="2"/>
+${lettering("ANSWER NEEDED", w / 2, 65, 48, "#fff6dc", 'text-anchor="middle"')}
+</g>`;
+    } else if (fx.motion === "victory" || fx.motion === "turnDone") {
       const colors = ["#be5946", "#4d8b75", "#bd8a24", "#7074a1"];
       for (let i = 0; i < 24; i++) {
         const x = 15 + ((i * 79 + step * (i % 2 ? 9 : -7) + width) % (width - 65));

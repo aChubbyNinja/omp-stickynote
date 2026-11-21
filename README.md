@@ -98,12 +98,12 @@ The `|` character separates fields; labels cannot contain it in slash commands. 
 
 New sessions start in fun mode. Resuming a branch restores its last explicit preference, including an opt-out saved in an earlier version. DND, crumple, and office sharing remain separate actions.
 
-1. **Confetti.** Finishing a normal OMP reply shows **TURN DONE** with confetti for 3.6 seconds, even with no checklist. Finishing the last real checkbox shows **SHIPPED** instead; a reply that already celebrated its checklist doesn't celebrate twice. Automatic notes follow the entire checklist across session renames, even though only three rows are visible. Neither celebration means software was published.
+1. **Done at a glance.** A successful reply shows **TURN DONE**; completing the last checkbox earns **SHIPPED**. The confetti moves briefly, then the final frame stays on the expanded note until new work, a question, or a dismissal replaces it. There's no looping animation or timeout. This is live session status, not a software release or a celebration replayed from history.
 2. **Curled paper and flutter.** A curled corner and brief flutter give real title/task changes and activity transitions a paper-like response.
 3. **Handwritten checks.** Completed checkboxes use varied ink strokes, briefly drawing newly completed marks.
 4. **Crumple and restore.** Dismiss the paper into a small crumpled ball, then restore the unchanged note with `/sticky show`. This works without fun mode.
-5. **Attention badges.** **READY**, **WORKING**, **YOUR TURN**, and **FINISHED** follow main-session activity, questions/approval requests, and completion. The waiting pulse is brief, not an endless animation.
-6. **Construction crew.** Two hard-hat workers appear on the expanded paper while OMP works, even during research or a plain answer. File edits, recognized builds and tests have their own props. A passing result is never inferred just from seeing the workers.
+5. **Answer needed.** A contrasting **ANSWER NEEDED** sign marks a handoff: answer in the normal OMP editor or form, not on the sticky note. Ask forms and approvals use a read-only banner beside the controls. For conversational replies, the note recognizes a direct question at the end of the final reply; it doesn't guess from questions in code samples or quoted messages.
+6. **Construction crew.** Beside **WORKING**, a hammer-wielding mechanic and a goggled blueprint reader assemble a tiny robot. Edits, builds, tests and their results have their own props. The ANSI fallback places the crew icons on the same line as the work status.
 7. **Milestone stamps.** **FIRST COMMIT**, **TESTS PASSED**, and **RELEASED** respond to supported command results, not words in a title or prompt.
 8. **Do-not-disturb sign.** A larger fold-out **DEEP WORK** or **WAITING ON A BUILD** sign keeps the original note intact and suppresses fun effects until DND is off.
 9. **LAN office board.** Explicitly share project titles, up to three tasks/check states, and attention status with a trusted group. `/sticky office board` opens a live, read-only dashboard.
@@ -113,7 +113,7 @@ New sessions start in fun mode. Resuming a branch restores its last explicit pre
 
 ### Fast local demo
 
-For the quickest check, leave the note expanded and ask OMP an ordinary question. Look for the workers while it answers and **TURN DONE** confetti when it finishes. No special prompt, tools, or LAN setup needed. If you opted out earlier, use `/sticky fun on`; if you see a DND sign, use `/sticky dnd off`. A minimized note stays a quiet square.
+To try both handoffs, ask: “Ask me which color to use, then wait for my answer.” Look for **ANSWER NEEDED**. Reply “Blue. Finish with one sentence and no follow-up question.” **TURN DONE** stays on screen; sending your next prompt brings the builders back. No LAN setup is needed. If you previously opted out, use `/sticky fun on` and `/sticky dnd off`. A minimized note stays a quiet square.
 
 Enter these commands in an interactive OMP session, pausing after each checkbox to see the effect:
 

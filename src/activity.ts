@@ -191,6 +191,42 @@ function released(signal: Signal, result: unknown): boolean {
   return false;
 }
 
+// Deliberately lexical: only a direct question at the end of a settled reply
+// counts. Examples, quoted questions and code are not requests for an answer.
+function endsWithQuestion(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  const text = content.flatMap(block => {
+    const value = record(block);
+    return value?.type === "text" && typeof value.text === "string" ? [value.text] : [];
+  }).join("\n");
+  const lines: string[] = [];
+  let fence: { marker: string; length: number } | undefined;
+  for (const line of text.split("\n")) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (marker && marker[1]![0] === fence.marker && marker[1]!.length >= fence.length && !marker[2]!.trim()) fence = undefined;
+      continue;
+    }
+    if (marker) { fence = { marker: marker[1]![0]!, length: marker[1]!.length }; continue; }
+    if (/^(?: {0,3}>| {4}|\t)/.test(line)) continue;
+    lines.push(line);
+  }
+  const prose = lines.join("\n")
+    .replace(/(`+)[\s\S]*?\1/g, "")
+    .replace(/"[^"\n]*"|“[^”]*”|‘[^’]*’|(?:^|\s)'[^'\n]*'(?=\s|[.!?]|$)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_]+/g, "")
+    .trim();
+  if (!prose.endsWith("?")) return false;
+  const question = prose.slice(0, -1).split(/[.!?]\s+|\n+|:\s+/).at(-1)!.trim().replace(/^(?:[-+•]|\d+[.)])\s+/, "");
+  return /^(?:can|could|would|will|do|did|are|were|have|has)\s+you\b/i.test(question) ||
+    /^(?:should|shall|may|can|could|would|do|did|are|will)\s+(?:i|we)\b/i.test(question) ||
+    /^(?:what|which|where|when|how|who)\b[^?]*\b(?:you|your|i|we|our|should)\b/i.test(question) ||
+    /^(?:what|which|where|when|how|who|whose)\s+(?!(?:could|would)\b)\S/i.test(question) ||
+    /^\S+(?:\s+\S+){0,3}\s+or\s+\S+(?:\s+\S+){0,3}$/i.test(question) ||
+    /^(?:is|does)\s+(?:this|that)\s+(?:work|okay|ok|acceptable|sound)\b/i.test(question);
+}
+
 /** Observe live main-session events only; reset silently invalidates all in-flight calls. */
 export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { reset(): void } {
   const calls = new Map<string, Call>();
@@ -254,7 +290,8 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
   }
   function pending(ctx: ExtensionContext): boolean {
     const snapshot = ctx.getAsyncJobSnapshot();
-    return !!snapshot && (snapshot.running.length > 0 || snapshot.delivery.queued > 0 || snapshot.delivery.delivering || snapshot.delivery.pendingJobIds.length > 0);
+    return !ctx.isIdle() || ctx.hasPendingMessages() ||
+      (!!snapshot && (snapshot.running.length > 0 || snapshot.delivery.queued > 0 || snapshot.delivery.delivering || snapshot.delivery.pendingJobIds.length > 0));
   }
   function finish(ctx: ExtensionContext, id: string, tool: string, result: unknown, isError: boolean): void {
     if (!guard(ctx)) return;
@@ -291,7 +328,7 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
       } else if (signal === "test") emit(ctx, token, () => callbacks.milestone("TESTS PASSED"));
       else if (released(signal, result)) emit(ctx, token, () => callbacks.milestone("RELEASED"));
     }
-    if (running) busy(ctx, token);
+    if (running || pending(ctx)) busy(ctx, token);
     else attention(ctx, token, waiting() ? "waiting" : "idle");
   }
 
@@ -353,8 +390,7 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     attention(ctx, generation, "waiting");
   });
   pi.on("tool_approval_resolved", (event, ctx) => {
-    if (!guard(ctx)) return;
-    approvals.delete(event.toolCallId);
+    if (!guard(ctx) || !approvals.delete(event.toolCallId)) return;
     if (!event.approved) failed = true;
     busy(ctx, generation);
   });
@@ -367,7 +403,8 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
     const token = generation;
     if (event.messages.some(message => message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted"))) failed = true;
     const terminal = event.messages.at(-1);
-    if (!event.willContinue && !event.awaitingAsyncWork && terminal?.role === "assistant" && (terminal.stopReason === "error" || terminal.stopReason === "aborted")) {
+    if (!event.willContinue && !event.awaitingAsyncWork && ctx.isIdle() && !ctx.hasPendingMessages() &&
+      terminal?.role === "assistant" && (terminal.stopReason === "error" || terminal.stopReason === "aborted")) {
       calls.clear();
       registeredCalls.clear();
       approvals.clear();
@@ -378,12 +415,23 @@ export function registerActivity(pi: ExtensionAPI, callbacks: Callbacks): { rese
       attention(ctx, cancelled, "idle");
       return;
     }
-    if (waiting()) { attention(ctx, token, "waiting"); return; }
-    if (event.willContinue || event.awaitingAsyncWork || calls.size > 0 || pending(ctx)) { attention(ctx, token, "working"); return; }
+    if (event.willContinue || event.awaitingAsyncWork || pending(ctx)) {
+      attention(ctx, token, waiting() ? "waiting" : "working");
+      return;
+    }
+    // An idle terminal host settle is authoritative, including when an eval
+    // wrapper or cancellation omitted a mirrored tool/approval end event.
     running = false;
+    const hadCrew = currentCrew() !== undefined;
+    calls.clear();
     registeredCalls.clear();
+    approvals.clear();
+    crewFailed = false;
+    if (hadCrew) crew(ctx, token, "none");
     const last = event.messages.at(-1);
-    attention(ctx, token, !failed && last?.role === "assistant" && last.stopReason === "stop" ? "finished" : "idle");
+    const finalReply = last?.role === "assistant" && last.stopReason === "stop" &&
+      !last.content?.some(block => block.type === "toolCall");
+    attention(ctx, token, finalReply && endsWithQuestion(last.content) ? "waiting" : finalReply && !failed ? "finished" : "idle");
   });
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.agent.kind === "main") reset();

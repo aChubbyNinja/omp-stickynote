@@ -44,6 +44,16 @@ export default async function noteContract(pi: ExtensionAPI): Promise<void> {
   text = note.render(38).map(cleanLabel).join("\n");
   assert.match(text, /RELEASE DASHBOARD/);
   assert.doesNotMatch(text, /\[[ x]\]/, "Clearing tasks must restore the empty state, not a blank checkbox");
+  const activeFrame = { fun: true, attention: "working", crew: "build", step: 0, checks: [] } as const;
+  const fullCard = { title: "Across the room", tasks: Array.from({ length: 3 }, () => ({ text: "A long task that wraps to a second line", done: false })) };
+  note.update(fullCard, activeFrame);
+  assert.ok(note.render(36).map(cleanLabel).some(row => /WORKING.*👷.*👷/.test(row)), "ANSI workers must share the status row");
+  const shortPane = new StickyNote({ maxRows: () => 4 });
+  shortPane.update(fullCard, { ...activeFrame, attention: "waiting", crew: "none" });
+  assert.ok(shortPane.render(24).map(cleanLabel).some(row => row.includes("ANSWER NEEDED")), "Long tasks must not push a question off a short terminal");
+  shortPane.update(fullCard, { ...activeFrame, attention: "finished", crew: "none", motion: "turnDone", step: 5 });
+  assert.ok(shortPane.render(24).map(cleanLabel).some(row => row.includes("TURN DONE")), "Completion must stay legible in the same short pane");
+  shortPane.dispose();
   note.dispose();
 
   const sessions = [

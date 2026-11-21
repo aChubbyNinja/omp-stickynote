@@ -66,15 +66,18 @@ test("finishing a real list celebrates and keeps newly checked row indexes", t =
   assert.equal(effects.frame.step, 1);
   effects.note(done);
   assert.equal(effects.frame.step, 1, "repeated snapshots must not restart animation");
-  effects.attention("waiting");
   effects.crew("pass");
   effects.wave();
   effects.milestone("TESTS PASSED");
   assert.equal(effects.frame.motion, "victory");
   assert.deepEqual(effects.frame.checks, [0, 2]);
   t.mock.timers.tick(10_000);
-  assert.equal(effects.frame.motion, undefined);
-  assert.deepEqual(effects.frame.checks, []);
+  assert.equal(effects.frame.motion, "victory");
+  assert.equal(effects.frame.step, 5);
+  assert.deepEqual(effects.frame.checks, [0, 2]);
+  const settled = effects.frame;
+  effects.note(done, true);
+  assert.equal(effects.frame, settled, "reopening keeps the SHIPPED stamp and its checked rows");
   assert.equal(events.crumpled, 0);
   const changes = events.changed;
   t.mock.timers.tick(10_000);
@@ -138,7 +141,7 @@ test("finishing a whole automatic checklist celebrates even if all three visible
   assert.equal(effects.frame.motion, "victory", "confetti should still be visible on a second glance");
   assert.equal(events.changed, changes, "holding the stamp must not keep repainting the screen");
   t.mock.timers.tick(1000);
-  assert.equal(effects.frame.motion, undefined);
+  assert.equal(effects.frame.motion, "victory");
   effects.note(before, true);
   effects.note({ ...after, progress: complete.slice(1) });
   assert.notEqual(effects.frame.motion, "victory", "dropping an unfinished item is not completion");
@@ -159,8 +162,9 @@ test("ordinary work shows hard hats; a clean reply celebrates the turn, not an u
   assert.equal(effects.frame.stamp, undefined);
   assert.deepEqual(effects.frame.checks, []);
   t.mock.timers.tick(4000);
-  assert.equal(effects.frame.motion, undefined);
-  assert.equal(effects.frame.crew, "none");
+  assert.equal(effects.frame.motion, "turnDone");
+  assert.equal(effects.frame.step, 5);
+  assert.equal(effects.frame.crew, "working");
   effects.attention("working");
   effects.attention("idle");
   assert.equal(effects.frame.motion, undefined, "errors and cancellations return to idle without confetti");
@@ -181,7 +185,7 @@ test("a delayed session title neither loses nor repeats a real checklist victory
   assert.equal(effects.frame.step, 1);
   t.mock.timers.tick(4000);
   effects.attention("finished");
-  assert.equal(effects.frame.motion, undefined, "do not play a second celebration at the end of the same turn");
+  assert.equal(effects.frame.motion, "victory", "keep the checklist stamp instead of playing a second celebration");
 });
 
 test("fast edits leave visible workers, not a test result; quiet mode cancels them", t => {
@@ -548,7 +552,7 @@ test("frame identity is stable until visible changes and callbacks observe the n
   assert.equal(observed.at(-1), effects.frame);
   assert.equal(effects.frame.attention, "working");
   assert.equal(effects.frame.crew, "test");
-  assert.equal(effects.frame.motion, undefined);
+  assert.equal(effects.frame.motion, undefined, "suppressed checklist completion cannot replay while work continues");
 });
 
 test("concurrent effects that cannot change a crumple preserve frame identity", t => {
@@ -566,4 +570,170 @@ test("concurrent effects that cannot change a crumple preserve frame identity", 
   t.mock.timers.tick(120);
   assert.notEqual(effects.frame, crumpling);
   assert.equal(effects.frame.step, 1);
+});
+
+test("a settled turn completion survives time, titles, repeated sync, and reopen without ticks", t => {
+  const { effects, events } = harness(t);
+  effects.fun(true);
+  effects.note(unfinished, true);
+  effects.attention("working");
+  effects.attention("finished");
+  t.mock.timers.tick(720);
+  const settled = effects.frame;
+  assert.equal(settled.motion, "turnDone");
+  assert.equal(settled.step, 5);
+  const changes = events.changed;
+  t.mock.timers.tick(86_400_000);
+  effects.note(unfinished);
+  effects.attention("finished");
+  const renamed = { ...unfinished, title: "Generated session headline" };
+  effects.note(renamed);
+  assert.equal(effects.frame, settled);
+  assert.equal(events.changed, changes);
+  effects.note(renamed, true); // restoreCard, including minimize/reopen
+  assert.equal(effects.frame, settled);
+  t.mock.timers.tick(86_400_000);
+  assert.equal(events.changed, changes);
+  effects.attention("working");
+  assert.equal(effects.frame.motion, "flutter");
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, "turnDone");
+  effects.attention("idle");
+  assert.equal(effects.frame.motion, undefined, "an error/cancellation clears the last success");
+});
+
+test("questions supersede checklist victory and resumed work can truthfully finish again", t => {
+  const { effects, events } = harness(t);
+  effects.fun(true);
+  effects.note(unfinished, true);
+  effects.attention("working");
+  effects.note(finished);
+  assert.equal(effects.frame.motion, "victory");
+  effects.attention("waiting");
+  assert.equal(effects.frame.motion, "pulse");
+  assert.deepEqual(effects.frame.checks, []);
+  t.mock.timers.tick(86_400_000);
+  assert.equal(effects.frame.motion, undefined);
+  assert.equal(effects.frame.attention, "waiting");
+  effects.note({ ...finished, title: "Late title" });
+  assert.equal(effects.frame.motion, undefined, "a title must not hide the question behind success");
+  effects.attention("working");
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, "turnDone", "the interrupted victory cannot suppress the final clean reply");
+  t.mock.timers.tick(720);
+  const changes = events.changed;
+  t.mock.timers.tick(86_400_000);
+  assert.equal(effects.frame.motion, "turnDone");
+  assert.equal(events.changed, changes);
+});
+
+test("a checklist completed while input is required never displays a false victory", t => {
+  const { effects } = harness(t);
+  effects.fun(true);
+  effects.note(unfinished, true);
+  effects.attention("working");
+  effects.attention("waiting");
+  effects.note(finished);
+  assert.equal(effects.frame.motion, "pulse");
+  t.mock.timers.tick(86_400_000);
+  effects.note(finished, true);
+  assert.equal(effects.frame.motion, undefined);
+  effects.attention("working");
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, "turnDone");
+});
+
+test("quiet modes restore current completion settled, not stale or replayed celebrations", t => {
+  const { effects, events } = harness(t);
+  effects.fun(true);
+  effects.attention("working");
+  effects.attention("finished");
+  for (const mode of ["fun", "dnd"] as const) {
+    if (mode === "fun") effects.fun(false);
+    else effects.dnd("DEEP WORK");
+    assert.equal(effects.frame.motion, undefined);
+    t.mock.timers.tick(86_400_000);
+    if (mode === "fun") effects.fun(true);
+    else effects.dnd(undefined);
+    assert.equal(effects.frame.motion, "turnDone");
+    assert.equal(effects.frame.step, 5);
+    const changes = events.changed;
+    t.mock.timers.tick(86_400_000);
+    assert.equal(events.changed, changes);
+  }
+  effects.dnd("DEEP WORK");
+  effects.attention("working");
+  effects.attention("waiting");
+  effects.dnd(undefined);
+  assert.equal(effects.frame.attention, "waiting");
+  assert.equal(effects.frame.motion, undefined, "cleared quiet does not replay the waiting pulse or old completion");
+  effects.fun(false);
+  effects.attention("working");
+  effects.attention("finished");
+  effects.fun(true);
+  assert.equal(effects.frame.motion, "turnDone", "a clean reply during quiet is still the current state");
+  assert.equal(effects.frame.step, 5);
+});
+
+test("dismissal and actual new work clear a held completion rather than reviving it on show", t => {
+  const { effects, events } = harness(t);
+  effects.fun(true);
+  effects.note(unfinished, true);
+  effects.attention("working");
+  effects.note(finished);
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, "victory", "SHIPPED takes precedence over turn completion");
+  effects.crew("fail");
+  assert.notEqual(effects.frame.motion, "victory");
+  effects.attention("working");
+  effects.attention("finished");
+  effects.crumple();
+  t.mock.timers.tick(720);
+  assert.equal(events.crumpled, 1);
+  effects.note(finished, true);
+  assert.equal(effects.frame.motion, undefined);
+  effects.attention("working");
+  effects.attention("finished");
+  effects.note({ title: "Next", tasks: [{ text: "New work", done: false }] });
+  assert.equal(effects.frame.motion, "flutter");
+  assert.deepEqual(effects.frame.checks, []);
+});
+
+test("suppressed checklist completions never queue a victory for enabling fun or clearing DND", t => {
+  const { effects } = harness(t);
+  effects.note(unfinished, true);
+  effects.note(finished);
+  effects.fun(true);
+  assert.equal(effects.frame.motion, undefined, "a dormant checklist is not a current completion signal");
+  effects.note(unfinished, true);
+  effects.attention("working");
+  effects.dnd("DEEP WORK");
+  effects.note(finished);
+  effects.dnd(undefined);
+  assert.equal(effects.frame.attention, "working");
+  assert.equal(effects.frame.motion, undefined, "DND does not queue a suppressed SHIPPED celebration");
+  effects.attention("finished");
+  assert.equal(effects.frame.motion, "turnDone", "a subsequent clean reply still gets its truthful completion");
+});
+
+test("quiet modes preserve an already shown checklist completion without replay", t => {
+  const { effects, events } = harness(t);
+  effects.fun(true);
+  effects.note(unfinished, true);
+  effects.attention("working");
+  effects.note(finished);
+  effects.attention("finished");
+  for (const mode of ["fun", "dnd"] as const) {
+    if (mode === "fun") effects.fun(false);
+    else effects.dnd("DEEP WORK");
+    assert.equal(effects.frame.motion, undefined);
+    effects.note(finished);
+    if (mode === "fun") effects.fun(true);
+    else effects.dnd(undefined);
+    assert.equal(effects.frame.motion, "victory");
+    assert.equal(effects.frame.step, 5);
+    const changes = events.changed;
+    t.mock.timers.tick(86_400_000);
+    assert.equal(events.changed, changes);
+  }
 });

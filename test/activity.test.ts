@@ -10,9 +10,13 @@ function harness() {
   const milestones: string[] = [];
   let enabled = true;
   let snapshot: unknown = null;
+  let idle = true;
+  let queued = false;
   const ctx = {
     agent: { kind: "main" },
     getAsyncJobSnapshot: () => snapshot,
+    isIdle: () => idle,
+    hasPendingMessages: () => queued,
   } as unknown as ExtensionContext;
   let onCrew: ((value: string) => void) | undefined;
   const api = {
@@ -39,6 +43,8 @@ function harness() {
     ctx, attention, crew, milestones, event, start, end, reset: observer.reset,
     enable(value: boolean) { enabled = value; },
     snapshot(value: unknown) { snapshot = value; },
+    idle(value: boolean) { idle = value; },
+    queued(value: boolean) { queued = value; },
     onCrew(value: (value: string) => void) { onCrew = value; },
   };
 }
@@ -392,6 +398,235 @@ test("continuations, running jobs and pending publication delivery prevent fake 
   h.snapshot(null);
   h.event("agent_end", { messages });
   assert.equal(h.attention.at(-1), "finished");
+});
+
+function reply(text: string, stopReason = "stop") {
+  return { role: "assistant", stopReason, content: [{ type: "text", text }] };
+}
+
+test("a direct question in the final reply waits for the next actual prompt", () => {
+  const h = harness();
+  h.event("agent_start");
+  h.event("message_end", { message: reply("Should I use the existing branch?") });
+  assert.equal(h.attention.at(-1), "working"); // A message alone cannot prove the run settled.
+  h.event("agent_end", { messages: [reply("Should I use the existing branch?")] });
+  assert.equal(h.attention.at(-1), "waiting");
+  for (const value of [
+    { source: "extension", text: "status notification" },
+    { source: "interactive", text: "/sticky fun on" },
+    { source: "interactive", text: " " },
+  ]) h.event("input", value);
+  assert.equal(h.attention.at(-1), "waiting");
+  h.event("tool_approval_resolved", { toolCallId: "unobserved", approved: true });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.event("input", { source: "rpc", text: "Use the existing branch." });
+  assert.equal(h.attention.at(-1), "working");
+  h.event("agent_start");
+  h.event("agent_end", { messages: [reply("Done.")] });
+  assert.equal(h.attention.at(-1), "finished");
+});
+
+test("final-question inference recognizes conservative direct requests only", () => {
+  for (const text of [
+    "Would you like me to apply the patch?",
+    "The patch is ready. Can you share the target branch?",
+    "Which option should we use?",
+    "What is your preferred name?",
+    "Which file?",
+    "One question: **Should I proceed?**",
+    "Which one?",
+    "Which color?",
+    "What size?",
+    "How many?",
+    "Blue or green?",
+    "Light blue or forest green?",
+    "The choices are ready.\n\nBlue or green?",
+    "- Does that work for you?",
+    "Should I update `src/index.ts`?",
+    "Should I proceed?\n\n> A quoted example: What could go wrong?",
+    "Should I proceed?\n\n```ts\nconst example = 'Why?';\n```",
+  ]) {
+    const h = harness();
+    h.event("agent_end", { messages: [reply(text)] });
+    assert.equal(h.attention.at(-1), "waiting", text);
+  }
+  for (const text of [
+    "Done.",
+    "Can you use it? Yes, the patch is ready.",
+    "Why not?",
+    "What could go wrong?",
+    "> Should I proceed?",
+    "    Should I proceed?",
+    "```text\nShould I proceed?\n```",
+    "~~~text\nShould I proceed?\n~~~",
+    "`Should I proceed?`",
+    '"Should I proceed?"',
+    "“Should I proceed?”",
+    "'Should I proceed?'",
+    "The documentation asks “Would you like to continue?”",
+    "Example: `Could you share the key?`",
+    "> Which color?",
+    "```text\nBlue or green?\n```",
+    '"Blue or green?"',
+    "Blue or green? I chose blue.",
+  ]) {
+    const h = harness();
+    h.event("agent_end", { messages: [reply(text)] });
+    assert.equal(h.attention.at(-1), "finished", text);
+  }
+});
+
+test("questions cannot turn continuations, live eval work or queued prompts into input waits", () => {
+  const messages = [reply("Should I proceed?")];
+  for (const hold of ["continuation", "awaiting", "streaming", "queued", "job"]) {
+    const h = harness();
+    h.event("agent_start");
+    if (hold === "streaming") h.idle(false);
+    if (hold === "queued") h.queued(true);
+    if (hold === "job") h.snapshot({ running: [{ id: "eval" }], delivery: { queued: 0, delivering: false, pendingJobIds: [] } });
+    h.event("agent_end", { messages, willContinue: hold === "continuation", awaitingAsyncWork: hold === "awaiting" });
+    assert.equal(h.attention.at(-1), "working", hold);
+    h.idle(true); h.queued(false); h.snapshot(null);
+    h.event("agent_end", { messages });
+    assert.equal(h.attention.at(-1), "waiting", hold);
+  }
+});
+
+test("non-final assistant questions and errors do not request an answer", () => {
+  for (const stopReason of ["error", "aborted", "length", "toolUse"]) {
+    const h = harness();
+    h.event("agent_end", { messages: [reply("Should I proceed?", stopReason)] });
+    assert.equal(h.attention.at(-1), "idle", stopReason);
+  }
+  const h = harness();
+  h.event("agent_end", { messages: [{ ...reply("Should I proceed?"), content: [
+    { type: "text", text: "Should I proceed?" }, { type: "toolCall", id: "tool", name: "eval", arguments: {} },
+  ] }] });
+  assert.equal(h.attention.at(-1), "idle");
+  h.event("agent_end", { messages: [reply("Should I proceed?"), { role: "toolResult", content: [] }] });
+  assert.equal(h.attention.at(-1), "idle");
+});
+
+test("a successful final question can request a decision after a failed tool", () => {
+  const h = harness();
+  h.event("agent_start");
+  h.start("npm test");
+  h.end("shell", { exitCode: 1 });
+  h.event("agent_end", { messages: [reply("The test failed. Should I fix the fixture or revert the change?")] });
+  assert.equal(h.attention.at(-1), "waiting");
+});
+
+test("structured questions outlive other work but only matching answers release them", () => {
+  const h = harness();
+  h.idle(false);
+  h.event("agent_start");
+  h.event("tool_execution_start", { toolCallId: "ask1", toolName: "ask", args: {} });
+  h.event("tool_execution_start", { toolCallId: "ask2", toolName: "ask", args: {} });
+  h.event("tool_approval_requested", { toolCallId: "approval" });
+  h.event("input", { source: "interactive", text: "A new queued instruction is not the form answer." });
+  h.start("npm test");
+  h.end();
+  h.event("agent_end", { messages: [reply("Should I proceed?")], willContinue: true });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.end("ask1", {}, false, "other");
+  h.end("unobserved", {}, false, "ask");
+  h.event("tool_approval_resolved", { toolCallId: "other", approved: true });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.end("ask1", {}, false, "ask");
+  h.event("tool_approval_resolved", { toolCallId: "approval", approved: true });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.end("ask2", {}, false, "ask");
+  assert.equal(h.attention.at(-1), "working");
+  h.idle(true);
+  h.event("agent_end", { messages: [reply("Done.")] });
+  assert.equal(h.attention.at(-1), "finished");
+  h.event("tool_approval_resolved", { toolCallId: "approval", approved: false });
+  assert.equal(h.attention.at(-1), "finished");
+});
+
+test("an authoritative idle settle releases missing ask and approval ends", () => {
+  const h = harness();
+  h.event("agent_start");
+  h.event("tool_execution_start", { toolCallId: "ask", toolName: "ask", args: {} });
+  h.event("tool_approval_requested", { toolCallId: "approval" });
+  h.event("agent_end", { messages: [reply("Which option should I use?")] });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.end("ask", {}, false, "ask");
+  h.event("tool_approval_resolved", { toolCallId: "approval", approved: true });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.event("input", { source: "interactive", text: "Option A." });
+  assert.equal(h.attention.at(-1), "working");
+});
+
+test("eval ask preflights do not claim an open form or hold terminal completion", () => {
+  const h = harness();
+  h.event("agent_start");
+  h.event("tool_call", { toolCallId: "eval-ask", toolName: "ask", input: { html: "<form></form>" } });
+  assert.equal(h.attention.at(-1), "working");
+  h.event("tool_approval_requested", { toolCallId: "eval-ask" });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.event("tool_approval_resolved", { toolCallId: "eval-ask", approved: true });
+  assert.equal(h.attention.at(-1), "working");
+  h.event("tool_result", { toolCallId: "eval-ask", toolName: "ask", input: {}, details: {}, content: [], isError: false });
+  h.event("agent_end", { messages: [reply("Done.")] });
+  assert.equal(h.attention.at(-1), "finished");
+});
+
+test("resuming actual work clears a settled question even without a new input event", () => {
+  const h = harness();
+  h.event("agent_end", { messages: [reply("Should I proceed?")] });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.event("before_agent_start");
+  assert.equal(h.attention.at(-1), "working");
+  h.event("agent_end", { messages: [reply("Done.")] });
+  assert.equal(h.attention.at(-1), "finished");
+});
+
+test("reset invalidates structured questions and late approval denials", () => {
+  const h = harness();
+  h.event("tool_execution_start", { toolCallId: "ask", toolName: "ask", args: {} });
+  h.event("tool_approval_requested", { toolCallId: "approval" });
+  h.reset();
+  h.event("input", { source: "interactive", text: "New task" });
+  h.event("agent_start");
+  h.end("ask", {}, false, "ask");
+  h.event("tool_approval_resolved", { toolCallId: "approval", approved: false });
+  assert.equal(h.attention.at(-1), "working");
+  h.event("agent_end", { messages: [reply("Done.")] });
+  assert.equal(h.attention.at(-1), "finished");
+});
+
+test("host activity prevents an old error settle from cancelling a newer ask", () => {
+  const h = harness();
+  h.idle(false);
+  h.event("agent_start");
+  h.event("tool_execution_start", { toolCallId: "ask", toolName: "ask", args: {} });
+  h.event("agent_end", { messages: [reply("Should I proceed?", "aborted")] });
+  assert.equal(h.attention.at(-1), "waiting");
+  h.end("ask", {}, false, "ask");
+  assert.equal(h.attention.at(-1), "working");
+  h.idle(true);
+  h.event("agent_end", { messages: [reply("Should I proceed?", "error")] });
+  assert.equal(h.attention.at(-1), "idle");
+});
+
+test("terminal cleanup honors callback generation cancellation", () => {
+  const h = harness();
+  h.event("agent_start");
+  h.start("npm test");
+  h.onCrew(value => { if (value === "none") h.reset(); });
+  h.event("agent_end", { messages: [reply("Should I proceed?")] });
+  assert.equal(h.attention.at(-1), "working");
+  h.end();
+  assert.deepEqual(h.milestones, []);
+});
+
+test("registered-only completion uses the live host state when the loop is not observed", () => {
+  const h = harness();
+  h.idle(false);
+  h.event("tool_call", { toolCallId: "eval-tool", toolName: "bash", input: { command: "echo running" } });
+  h.event("tool_result", { toolCallId: "eval-tool", toolName: "bash", input: { command: "echo running" }, details: {}, content: [], isError: false });
+  assert.equal(h.attention.at(-1), "working");
 });
 
 test("only npm's direct t alias means test; arbitrary t scripts do not", () => {

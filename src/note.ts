@@ -301,9 +301,9 @@ export class StickyNote implements Component {
     const cardWidth = width - shadow;
     const padding = cardWidth >= 8 ? 2 : 0;
     const inner = Math.max(1, cardWidth - padding * 2);
-    const row = (text: string, bold = false) => {
+    const row = (text: string, bold = false, paper = PAPER) => {
       const fitted = truncateToWidth(text, inner);
-      return PAPER + " ".repeat(padding) + (bold ? BOLD : "") + fitted + NORMAL +
+      return paper + " ".repeat(padding) + (bold ? BOLD : "") + fitted + NORMAL +
         " ".repeat(Math.max(0, cardWidth - padding - visibleWidth(fitted))) + RESET +
         (shadow ? SHADOW + " " + RESET : "");
     };
@@ -311,6 +311,15 @@ export class StickyNote implements Component {
       ? PAPER + (top ? "╭" : "╰") + "─".repeat(cardWidth - 2) + (top ? "╮" : "╯") + RESET + " ".repeat(shadow)
       : row("");
     const rows = [edge(true)];
+    const labels = effectLabels(this.#fx);
+    const handoff = this.#fx?.fun && !this.#fx.dnd && this.#fx.motion !== "crumple" &&
+      (this.#fx.attention === "waiting" || this.#fx.motion === "turnDone" || this.#fx.motion === "victory");
+    if (handoff) {
+      const sign = this.#fx?.attention === "waiting" ? "\x1b[48;2;116;50;23m\x1b[38;2;255;246;220m" : PAPER;
+      for (const line of wrapLabel(labels[0], 2, inner)) {
+        rows.push(row(" ".repeat(Math.max(0, Math.floor((inner - visibleWidth(line)) / 2))) + line, true, sign));
+      }
+    }
     for (const line of wrapLabel(this.#note.title.toUpperCase(), 2, inner)) {
       rows.push(row(" ".repeat(Math.max(0, Math.floor((inner - visibleWidth(line)) / 2))) + line, true));
     }
@@ -325,9 +334,9 @@ export class StickyNote implements Component {
         rows.push(row((i === 0 ? (task.done ? "[x] " : "[ ] ") : "    ") + lines[i], true));
       }
     }
-    for (const label of effectLabels(this.#fx)) {
+    for (let i = handoff ? 1 : 0; i < labels.length; i++) {
       rows.push(row(""));
-      for (const line of wrapLabel(label, 2, inner)) rows.push(row(line, true));
+      for (const line of wrapLabel(labels[i], 2, inner)) rows.push(row(line, true));
     }
     rows.push(row(""), edge(false));
     if (shadow) rows.push(" " + SHADOW + " ".repeat(cardWidth) + RESET);

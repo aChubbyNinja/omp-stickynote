@@ -99,6 +99,26 @@ export default function stickynote(pi: ExtensionAPI): void {
     return !saved.hidden && !crumpled;
   }
 
+  function questionDialogOpen(): boolean {
+    const focused = tui?.getFocused();
+    if (!focused) return false;
+    // Packaged OMP minifies class names, but preserves public form/approval
+    // methods. Never read the answers or call a method that changes the form.
+    if ("givenAnswers" in focused && "optionNotes" in focused) return true;
+    if (attention === "waiting" && "toggleDetails" in focused) return true;
+    const kind = focused.debugKind ?? focused.constructor.name;
+    return kind === "HtmlFormDialog" || kind === "AskDialogComponent" || kind === "ApprovalDialogComponent";
+  }
+
+  function questionSignalVisible(): boolean {
+    const live = tui;
+    if (!live || !visible() || saved.minimized || crumpling || boardOpen || !fx?.frame.fun || dnd || !questionDialogOpen()) return false;
+    // A secondary sheet (help, picker, editor, etc.) owns its whole surface.
+    // Leave that dialog alone even when a question remains open underneath it.
+    return !live.overlayStack.some(entry => entry.component !== mounted && !entry.hidden &&
+      entry.options?.visible?.(live.terminal.columns, live.terminal.rows) !== false);
+  }
+
   function content() {
     return saved.manual ?? { title: title(), tasks: taskRows, progress: tasks };
   }
@@ -294,6 +314,7 @@ export default function stickynote(pi: ExtensionAPI): void {
       width: overlayWidth(),
       margin: { top: 0, right: 2, left: 1, bottom: 4 },
       maxHeight: "100%",
+      visible: () => !questionDialogOpen(),
     });
     // OMP 18.21 has no passive overlay option. Its public stack uses `released`
     // for sheets that remain visible without holding keyboard focus. Keep this
@@ -440,6 +461,7 @@ export default function stickynote(pi: ExtensionAPI): void {
         if (frame.reset) historyRows = 0;
         historyRows += frame.history.length;
         if (frame.alt || boardOpen || !visible()) { paintDesktop(false); return; }
+        if (questionDialogOpen()) { paintDesktop(false); return; }
         if (hasStarted && !centered && historyRows + frame.viewport.length > frame.rows) {
           clearGraphics();
           centered = true;
@@ -480,7 +502,17 @@ export default function stickynote(pi: ExtensionAPI): void {
       mount();
       paint();
       const component: Component = {
-        render: () => [],
+        // This sanctioned composer row stays beside inline host ask/approval
+        // forms, including eval-dispatched forms, without painting over controls
+        // or registering any keyboard, mouse, or focus handler.
+        render: width => {
+          if (owner !== lifecycle || !active(ctx) || !questionSignalVisible() || width < 1) return [];
+          const lines = width >= 35 && liveTui.terminal.rows >= 24
+            ? [" █▀█ █▀▀ █▀█ █   █ █    ", " █▀▄ ██▄ █▀▀ █▄▄  █     ", "     ANSWER NEEDED      "]
+            : [" ? ANSWER NEEDED ".slice(0, width)];
+          const margin = " ".repeat(Math.floor((width - lines[0].length) / 2));
+          return lines.map(line => margin + `\x1b[1;38;2;255;246;220;48;2;116;50;23m${line}\x1b[0m`);
+        },
         dispose: () => { if (owner === lifecycle && note === ownedNote) stop(); else ownedNote.dispose(); },
       };
       return component;
